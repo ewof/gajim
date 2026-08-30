@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import mimetypes
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import ParseResult
@@ -23,9 +25,11 @@ from gajim.common.const import IMAGE_MIME_TYPES
 from gajim.common.const import VIDEO_MIME_TYPES
 from gajim.common.i18n import _
 from gajim.common.i18n import p_
+from gajim.common.regex import HTTPS_URL_RX
 from gajim.common.regex import IRI_RX
 from gajim.common.storage.archive import models as mod
 from gajim.common.util.filesystem import sanitize_filename
+from gajim.common.util.gif_hosts import is_gif_host_page
 from gajim.common.util.uri import Coords
 from gajim.common.util.uri import get_geo_choords
 
@@ -126,7 +130,16 @@ def guess_simple_file_type(
 
 
 def get_size_and_mime_type(path: Path) -> tuple[str, int]:
-    return guess_mime_type(path), os.path.getsize(path)
+    size = os.path.getsize(path)
+    mime_type = guess_mime_type(path)
+    if not mime_type or mime_type == "application/octet-stream":
+        try:
+            data = path.read_bytes()[:4096]
+        except OSError:
+            data = None
+        if data:
+            mime_type = guess_mime_type(path, data)
+    return mime_type, size
 
 
 def get_icon_for_mime_type(mime_type: str | None) -> Gio.Icon:
@@ -147,6 +160,27 @@ def is_image(mime_type: str) -> bool:
     return mime_type in IMAGE_MIME_TYPES
 
 
+def is_direct_media_mime_type(mime_type: str) -> bool:
+    return is_image(mime_type) or is_audio(mime_type) or is_video(mime_type)
+
+
+MAX_DIRECT_MEDIA_URLS = 3
+
+
+def iter_direct_media_urls(
+    text: str, *, limit: int = MAX_DIRECT_MEDIA_URLS
+) -> list[str]:
+    urls: list[str] = []
+    matches = itertools.islice(re.finditer(HTTPS_URL_RX, text), limit)
+    for match in matches:
+        url = match.group()
+        if len(url) <= 10:
+            continue
+        if is_gif_host_page(url) or is_direct_media_mime_type(guess_mime_type(url)):
+            urls.append(url)
+    return urls
+
+
 @dataclass
 class UrlPreview:
     uri: str
@@ -155,9 +189,10 @@ class UrlPreview:
     text: str
     icon: Gio.Icon
     encrypted: bool
+    from_link: bool = False
 
     @classmethod
-    def from_uri(cls, uri: str) -> UrlPreview:
+    def from_uri(cls, uri: str, *, from_link: bool = False) -> UrlPreview:
         encrypted = uri.startswith("aesgcm://")
         file_name = filename_from_uri(uri)
         icon, file_type, mime_type = guess_simple_file_type(uri)
@@ -169,6 +204,7 @@ class UrlPreview:
             text=text,
             icon=icon,
             encrypted=encrypted,
+            from_link=from_link,
         )
 
 
@@ -221,9 +257,12 @@ def get_preview_data(
     if not app.settings.get("preview_allow_all_images"):
         return None
 
+    if is_gif_host_page(uri):
+        return UrlPreview.from_uri(uri, from_link=True)
+
     mime_type = guess_mime_type(uri)
     if mime_type not in ALL_MIME_TYPES:
         log.info("%s not in allowed mime types", mime_type)
         return None
 
-    return UrlPreview.from_uri(uri)
+    return UrlPreview.from_uri(uri, from_link=True)

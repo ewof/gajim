@@ -37,8 +37,10 @@ from datetime import UTC
 from pathlib import Path
 
 from gi.repository import Adw
+from gi.repository import Gdk
 from gi.repository import Gio
 from gi.repository import GLib
+from gi.repository import GObject
 from gi.repository import Gtk
 from nbxmpp import JID
 from nbxmpp.const import ConnectionProtocol
@@ -415,6 +417,7 @@ class GajimApplication(Adw.Application, CoreApplication):
             ("accounts", self._on_accounts_action),
             ("add-contact", self._on_add_contact_action),
             ("copy-text", self._on_copy_text_action),
+            ("copy-image", self._on_copy_image_action),
             ("open-link", self._on_open_link_action),
             ("export-history", self._on_export_history_action),
             ("remove-history", self._on_remove_history_action),
@@ -782,6 +785,20 @@ class GajimApplication(Adw.Application, CoreApplication):
     @staticmethod
     def _on_copy_text_action(_action: Gio.SimpleAction, param: GLib.Variant) -> None:
         app.window.get_clipboard().set(param.get_string())
+
+    @staticmethod
+    def _on_copy_image_action(_action: Gio.SimpleAction, param: GLib.Variant) -> None:
+        from gajim.common.util.image import get_texture_from_file
+
+        texture = get_texture_from_file(Path(param.get_string()))
+        if texture is None:
+            return
+        value = GObject.Value()
+        value.init(Gdk.Texture)
+        value.set_object(texture)
+        app.window.get_clipboard().set_content(
+            Gdk.ContentProvider.new_for_value(value)
+        )
 
     @staticmethod
     def _on_open_chat_action(_action: Gio.SimpleAction, param: GLib.Variant) -> None:

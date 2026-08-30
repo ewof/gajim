@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import textwrap
 from collections.abc import Iterator
+from pathlib import Path
 from urllib.parse import quote
 
 from gi.repository import Gio
@@ -842,12 +843,20 @@ def _get_moderate_params(
     return single_param, multiple_param
 
 
-def get_preview_menu(uri: str, *, encrypted: bool = False) -> GajimMenu:
-    menu_items: MenuItemListT = [
-        (_("_Copy Link"), "app.copy-text", uri),
-    ]
+def get_preview_menu(
+    uri: str,
+    *,
+    encrypted: bool = False,
+    orig_path: Path | None = None,
+    from_link: bool = False,
+) -> GajimMenu:
+    menu_items: MenuItemListT = []
+    if orig_path is not None:
+        menu_items.append((_("Copy _Image"), "app.copy-image", str(orig_path)))
+    if uri and (from_link or orig_path is None):
+        menu_items.append((_("_Copy Link"), "app.copy-text", uri))
 
-    if not encrypted:
+    if uri and not encrypted:
         menu_items.append((_("Open Link in _Browser"), "app.open-link", uri))
 
     return GajimMenu.from_list(menu_items)

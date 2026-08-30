@@ -45,7 +45,6 @@ class ChatPage(Gtk.Paned):
 
     _chat_list_header: ChatListHeader = Gtk.Template.Child()
     _chat_stack: ChatStack = Gtk.Template.Child()
-    _list_scrolled: Gtk.ScrolledWindow = Gtk.Template.Child()
     _list_stack: Gtk.Stack = Gtk.Template.Child()
     _search_revealer: Gtk.Revealer = Gtk.Template.Child()
     _search_view: SearchView = Gtk.Template.Child()
@@ -216,10 +215,9 @@ class ChatPage(Gtk.Paned):
         self._update_list_stack_header()
 
     def _update_list_stack_header(self) -> None:
-        self._list_scrolled.get_vadjustment().set_value(0)
-
         chat_list = self._chat_list_stack.get_current_chat_list()
         assert chat_list is not None
+        chat_list.scroll_to_top()
         self._chat_list_header.set_header_mode("chat")
         self._chat_list_header.set_label(
             app.settings.get_workspace_setting(chat_list.workspace_id, "name")

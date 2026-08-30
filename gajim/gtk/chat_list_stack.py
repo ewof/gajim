@@ -45,7 +45,7 @@ class ChatListStack(Gtk.Stack, EventHelper):
         EventHelper.__init__(self)
         self.set_hexpand(True)
         self.set_vexpand(True)
-        self.set_vhomogeneous(False)
+        self.set_vhomogeneous(True)
 
         self._chat_lists: dict[str, ChatList] = {}
 

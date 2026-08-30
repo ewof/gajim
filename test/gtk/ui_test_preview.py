@@ -43,6 +43,7 @@ PREVIEW_TYPES = {
     "Animated PNG URL": "https://gajim.org/img/gajim-test.png",
     "Audio URL": "https://dev.gajim.org/gajim/gajim/-/wikis/uploads/dec966d89848453df07e0bd9b2ebc3d3/Gajim.ogg",
     "PDF URL": "https://www.rfc-editor.org/rfc/pdfrfc/rfc6120.txt.pdf",
+    "Video URL": "https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4",
 }
 
 

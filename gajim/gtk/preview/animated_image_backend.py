@@ -157,8 +157,10 @@ class AnimatedImageBackend(GObject.Object, SignalManager):
     def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message) -> None:
         assert self._pipeline is not None
         self._pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, 0)
-        self._loop_counter = (self._loop_counter + 1) % self._max_loop_counts
-        if self._loop_counter == 0:
+        if self._max_loop_counts <= 0:
+            return
+        self._loop_counter += 1
+        if self._loop_counter >= self._max_loop_counts:
             self.pause()
 
     def _on_state_changed(self, _bus: Gst.Bus, message: Gst.Message) -> None:

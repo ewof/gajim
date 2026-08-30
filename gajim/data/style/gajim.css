@@ -406,6 +406,16 @@ button.flat.link { padding: 0; border: 0; }
 .chatlist {
     background: transparent;
 }
+.chatlist-container {
+    min-height: 0;
+}
+.chatlist-split-paned {
+    min-height: 0;
+}
+.chatlist-pane-label {
+    padding: 4px 16px 2px 16px;
+    font-size: 0.85em;
+}
 .chatlist-row {
     transition: none;
     padding: 4px 0px 4px 6px;
@@ -758,6 +768,33 @@ entry.field-missing {
 }
 .preview-video-overlay {
     background-color: black;
+}
+.preview-video-controls {
+    background: alpha(var(--window-bg-color), 0.85);
+    padding: 4px 8px;
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+.preview-video-volume {
+    min-width: 70px;
+    max-width: 90px;
+}
+.media-lightbox,
+window.media-lightbox {
+    background-color: alpha(#000000, 0.82);
+}
+.media-lightbox-close,
+.media-lightbox-fullscreen {
+    margin: 12px;
+    min-width: 36px;
+    min-height: 36px;
+}
+.media-lightbox-fullscreen {
+    margin-end: 56px;
+}
+.media-lightbox-controls {
+    margin: 12px 48px;
+    border-radius: 8px;
 }
 .open-graph-preview {
     padding: 0;

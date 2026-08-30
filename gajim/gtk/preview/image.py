@@ -13,27 +13,19 @@ from pathlib import Path
 
 from gi.repository import Adw
 from gi.repository import Gdk
-from gi.repository import Gio
 from gi.repository import GLib
 from gi.repository import GObject
 from gi.repository import Gtk
 
 from gajim.common import app
 from gajim.common.const import IMAGE_MIME_TYPES
-from gajim.common.const import VIDEO_MIME_TYPES
 from gajim.common.multiprocess.thumbnail import create_thumbnail
-from gajim.common.multiprocess.video_thumbnail import (
-    extract_video_thumbnail_and_properties,
-)
 from gajim.common.util.filesystem import load_file_async
 from gajim.common.util.image import image_size
 from gajim.common.util.image import is_image_animated
 
 from gajim.gtk.preview.animated_image import AnimatedImage
-from gajim.gtk.preview.animated_image_backend import AnimatedImageBackend
-from gajim.gtk.preview.animated_image_fallback_backend import (
-    AnimatedImageFallbackBackend,
-)
+from gajim.gtk.preview.animated_image_texture_backend import AnimatedImageTextureBackend
 from gajim.gtk.preview.file_control_buttons import FileControlButtons
 from gajim.gtk.preview.misc import LoadingBox  # noqa: F401 # type: ignore
 from gajim.gtk.util.classes import SignalManager
@@ -196,7 +188,6 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
     _content_overlay: Gtk.Overlay = Gtk.Template.Child()
     _image_button: Gtk.Button = Gtk.Template.Child()
     _picture: Gtk.Picture = Gtk.Template.Child()
-    _play_image: Gtk.Image = Gtk.Template.Child()
     _file_control_buttons: FileControlButtons = Gtk.Template.Child()
 
     def __init__(
@@ -206,6 +197,8 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         mime_type: str,
         orig_path: Path,
         thumb_path: Path,
+        uri: str | None = None,
+        from_link: bool = False,
     ) -> None:
         Gtk.Box.__init__(self)
         SignalManager.__init__(self)
@@ -214,15 +207,13 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         self._thumb_path = thumb_path
         self._filename = filename
         self._mime_type = mime_type
+        self._uri = uri
+        self._from_link = from_link
 
         self._layout = ImagePreviewLayout()
         self.set_layout_manager(self._layout)
 
-        if mime_type in IMAGE_MIME_TYPES:
-            self._type = "image"
-        elif mime_type in VIDEO_MIME_TYPES:
-            self._type = "video"
-        else:
+        if mime_type not in IMAGE_MIME_TYPES:
             raise ValueError("Not supported mime type: %s" % mime_type)
 
         content_hover_controller = Gtk.EventControllerMotion()
@@ -236,12 +227,11 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
 
         pointer_cursor = Gdk.Cursor.new_from_name("pointer")
         self._image_button.set_cursor(pointer_cursor)
-        self._image_button.set_action_target_value(
-            GLib.Variant("s", str(self._orig_path))
-        )
+        self._image_button.set_action_name(None)
+        self._connect(self._image_button, "clicked", self._on_image_clicked)
 
         if not self._thumb_path.exists():
-            self._create_thumbnail(self._type)
+            self._create_image_thumbnail()
         else:
             load_file_async(self._thumb_path, self._on_thumb_load_finished)
 
@@ -256,12 +246,6 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         self._thumbnail = data
         self._display_image_preview()
 
-    def _create_thumbnail(self, type_: typing.Literal["image", "video"]) -> None:
-        if type_ == "image":
-            self._create_image_thumbnail()
-        elif type_ == "video":
-            self._create_video_thumbnail()
-
     def _create_image_thumbnail(self) -> None:
         assert self._thumb_path is not None
         assert self._orig_path is not None
@@ -272,23 +256,6 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
                 self._thumb_path,
                 app.settings.get("preview_size") * app.window.get_scale_factor(),
                 self._mime_type,
-            )
-            future.add_done_callback(
-                partial(GLib.idle_add, self._create_thumbnail_finished)
-            )
-        except Exception as error:
-            log.warning("Creating thumbnail failed for: %s %s", self._orig_path, error)
-            self.emit("display-error")
-
-    def _create_video_thumbnail(self) -> None:
-        assert self._orig_path is not None
-
-        try:
-            future = app.process_pool.submit(
-                extract_video_thumbnail_and_properties,
-                self._orig_path,
-                self._thumb_path,
-                app.settings.get("preview_size"),
             )
             future.add_done_callback(
                 partial(GLib.idle_add, self._create_thumbnail_finished)
@@ -316,7 +283,10 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
 
     def _display_image_preview(self) -> None:
         if self._mime_type == "image/gif" and is_image_animated(self._orig_path):
-            self._display_animated_image_preview(AnimatedImageBackend)
+            # gtk4paintablesink can be present but still fail to draw GIF
+            # frames (GL decodebin path). The texture backend is reliable
+            # with or without gst-plugin-gtk4.
+            self._display_animated_image_preview([AnimatedImageTextureBackend])
             return
 
         if self._mime_type in [
@@ -324,7 +294,7 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
             "image/avif",
             "image/png",
         ] and is_image_animated(self._orig_path):
-            self._display_animated_image_preview(AnimatedImageFallbackBackend)
+            self._display_animated_image_preview([AnimatedImageTextureBackend])
             return
 
         self._display_static_image_preview()
@@ -369,24 +339,18 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         self._image_button.set_tooltip_text(self._filename)
         self._picture.set_paintable(texture)
 
-        if self._type == "video":
-            self._image_button.add_css_class("preview-video-overlay")
-            self._play_image.set_pixel_size(min(width, height) // 3)
-            self._play_image.set_visible(True)
-
         self._stack.set_visible_child_name("preview")
 
-    def _display_animated_image_preview(
-        self, backend: typing.Any[AnimatedImageBackend, AnimatedImageFallbackBackend]
-    ) -> None:
+    def _display_animated_image_preview(self, backends: list[type]) -> None:
         image_width, image_height = image_size(self._orig_path)
         width, height = self._image_preview_dimension(image_width, image_height)
 
-        animated_image = AnimatedImage(self._thumb_path, self._orig_path, backend)
+        animated_image = AnimatedImage(self._thumb_path, self._orig_path, backends)
         pointer_cursor = Gdk.Cursor.new_from_name("pointer")
         animated_image.set_cursor(pointer_cursor)
 
         self._connect(animated_image, "error", self._on_animated_image_error)
+        self._connect(animated_image, "clicked", self._on_image_clicked)
 
         self._set_preview_dimension(width, height)
         self._content_overlay.set_child(animated_image)
@@ -394,7 +358,17 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         self._stack.set_visible_child_name("preview")
 
     def _on_animated_image_error(self, _animated_image: AnimatedImage) -> None:
-        Gio.AppInfo.launch_default_for_uri(self._orig_path.as_uri(), None)
+        log.warning("Could not animate image %s", self._orig_path)
+
+    def _on_image_clicked(self, *_args: object) -> None:
+        from gajim.gtk.preview.media_lightbox import show_image_lightbox
+
+        show_image_lightbox(
+            self._orig_path,
+            self._mime_type,
+            uri=self._uri,
+            from_link=self._from_link,
+        )
 
     def _on_content_cursor_enter(
         self,

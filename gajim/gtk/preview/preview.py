@@ -7,7 +7,8 @@ from typing import cast
 
 import hashlib
 import logging
-import sys
+from concurrent.futures import Future
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,14 +26,19 @@ from gajim.common.enum import PreviewState
 from gajim.common.file_transfer_manager import FileTransfer
 from gajim.common.helpers import determine_proxy
 from gajim.common.i18n import _
+from gajim.common.multiprocess.gif_host import resolve_gif_host_media_url
 from gajim.common.multiprocess.http import CancelledError
 from gajim.common.multiprocess.http import ContentTypeNotAllowed
 from gajim.common.multiprocess.http import HTTPStatusError
 from gajim.common.multiprocess.http import MaxContentLengthExceeded
+from gajim.common.util.gif_hosts import is_gif_host_page
+from gajim.common.util.preview import filename_from_uri
 from gajim.common.util.preview import get_icon_for_mime_type
 from gajim.common.util.preview import get_image_paths
 from gajim.common.util.preview import get_size_and_mime_type
+from gajim.common.util.preview import guess_simple_file_type
 from gajim.common.util.preview import is_audio
+from gajim.common.util.preview import is_direct_media_mime_type
 from gajim.common.util.preview import is_image
 from gajim.common.util.preview import is_video
 from gajim.common.util.preview import UrlPreview
@@ -41,6 +47,7 @@ from gajim.gtk.menus import get_preview_menu
 from gajim.gtk.preview.audio import AudioPreviewWidget
 from gajim.gtk.preview.file_control_buttons import FileControlButtons
 from gajim.gtk.preview.image import ImagePreviewWidget
+from gajim.gtk.preview.video import VideoPreviewWidget
 from gajim.gtk.util.classes import SignalManager
 from gajim.gtk.util.misc import get_ui_string
 from gajim.gtk.widgets import GajimPopover
@@ -113,6 +120,9 @@ class PreviewWidget(Gtk.Box, SignalManager):
         self._account = account
         self._from_us = from_us
         self._uri = preview.uri
+        self._from_link = preview.from_link
+        self._media_uri: str | None = None
+        self._resolving = False
         self._file_size = 0
         self._preview_id = hashlib.sha256(self._uri.encode()).hexdigest()
         self._preview_id_short = self._preview_id[:10]
@@ -178,13 +188,19 @@ class PreviewWidget(Gtk.Box, SignalManager):
 
         if self._orig_path.exists():
             self._mime_type, self._file_size = get_size_and_mime_type(self._orig_path)
-            self._set_widget_state(PreviewState.DOWNLOADED)
-            self._set_widget_state(PreviewState.DISPLAY)
-            return
+            # Gif-host page URIs have no media extension, so an earlier
+            # download may be MP4/GIF stored without a suffix. Sniff it.
+            # Re-resolve only when the cached file is not media (e.g. HTML).
+            if is_direct_media_mime_type(self._mime_type) or not is_gif_host_page(
+                self._uri
+            ):
+                self._set_widget_state(PreviewState.DOWNLOADED)
+                self._set_widget_state(PreviewState.DISPLAY)
+                return
 
         max_content_length = app.settings.get("preview_max_file_size")
         if max_content_length > 0 and self._should_auto_preview(context):
-            self._download_content(max_content_length, ALL_MIME_TYPES)
+            self._begin_download(max_content_length, ALL_MIME_TYPES)
 
         else:
             self._info_message = _("Automatic preview disabled")
@@ -192,7 +208,7 @@ class PreviewWidget(Gtk.Box, SignalManager):
 
     def do_unroot(self) -> None:
         self._disconnect_all()
-        if isinstance(self._widget, AudioPreviewWidget):
+        if isinstance(self._widget, AudioPreviewWidget | VideoPreviewWidget):
             self._widget.run_destroy()
         del self._menu_popover
         del self._http_obj
@@ -256,11 +272,19 @@ class PreviewWidget(Gtk.Box, SignalManager):
         # all other widget states remain as in PreviewState.DOWNLOADED
         if state == PreviewState.DISPLAY:
             widget = None
-            if is_video(self._mime_type) and sys.platform == "darwin":
-                # https://dev.gajim.org/gajim/gajim/-/issues/12625
-                pass
+            if is_video(self._mime_type):
+                assert self._mime_type is not None
+                widget = VideoPreviewWidget(
+                    self._filename,
+                    self._file_size,
+                    self._mime_type,
+                    self._orig_path,
+                    self._thumb_path,
+                    loop_as_gif=is_gif_host_page(self._uri),
+                    uri=self._uri,
+                )
 
-            elif is_image(self._mime_type) or is_video(self._mime_type):
+            elif is_image(self._mime_type):
                 assert self._mime_type is not None
                 widget = ImagePreviewWidget(
                     self._filename,
@@ -268,6 +292,8 @@ class PreviewWidget(Gtk.Box, SignalManager):
                     self._mime_type,
                     self._orig_path,
                     self._thumb_path,
+                    uri=self._uri,
+                    from_link=self._from_link,
                 )
 
             elif is_audio(self._mime_type):
@@ -315,7 +341,7 @@ class PreviewWidget(Gtk.Box, SignalManager):
 
     def _on_download_clicked(self, button: Gtk.Button) -> None:
         button.set_sensitive(False)
-        self._download_content()
+        self._begin_download()
 
     def _on_icon_clicked(self, button: Gtk.Button) -> None:
         if self._state == PreviewState.OFFER_DOWNLOAD:
@@ -328,6 +354,10 @@ class PreviewWidget(Gtk.Box, SignalManager):
 
     def _on_cancel_download_clicked(self, button: Gtk.Button) -> None:
         button.set_sensitive(False)
+        if self._resolving:
+            self._resolving = False
+            self._set_widget_state(PreviewState.OFFER_DOWNLOAD)
+            return
         assert self._http_obj is not None
         self._http_obj.cancel()
 
@@ -340,21 +370,126 @@ class PreviewWidget(Gtk.Box, SignalManager):
     ) -> None:
         gesture_click.set_state(Gtk.EventSequenceState.CLAIMED)
         encrypted = self._uri.startswith("aesgcm://")
-        menu = get_preview_menu(self._uri, encrypted=encrypted)
+        orig_path = None
+        if (
+            self._state in (PreviewState.DOWNLOADED, PreviewState.DISPLAY)
+            and self._orig_path.exists()
+            and is_image(self._mime_type)
+        ):
+            orig_path = self._orig_path
+        menu = get_preview_menu(
+            self._uri,
+            encrypted=encrypted,
+            orig_path=orig_path,
+            from_link=self._from_link,
+        )
         self._menu_popover.set_menu_model(menu)
         self._menu_popover.set_pointing_to_coord(x, y)
         self._menu_popover.popup()
+
+    def _begin_download(
+        self,
+        max_content_length: int = -1,
+        allowed_content_types: set[str] | None = None,
+    ) -> None:
+        if is_gif_host_page(self._uri) and self._media_uri is None:
+            self._resolve_gif_host(max_content_length, allowed_content_types)
+            return
+
+        self._download_content(max_content_length, allowed_content_types)
+
+    def _resolve_gif_host(
+        self,
+        max_content_length: int,
+        allowed_content_types: set[str] | None,
+    ) -> None:
+        log.info("Resolve GIF host page: %s %s", self._preview_id_short, self._uri)
+        self._resolving = True
+        self._info_message = None
+        self._set_widget_state(PreviewState.DOWNLOADING)
+
+        proxy = determine_proxy(self._account)
+        try:
+            future = app.process_pool.submit(
+                resolve_gif_host_media_url,
+                self._uri,
+                None if proxy is None else proxy.get_uri(),
+                app.settings.get("use_http2"),
+            )
+        except Exception as error:
+            log.warning("Unable to resolve GIF host page: %s %s", self._uri, error)
+            self._info_message = _("Could not load GIF")
+            self._set_widget_state(PreviewState.OFFER_DOWNLOAD)
+            return
+
+        future.add_done_callback(
+            partial(
+                GLib.idle_add,
+                self._on_gif_host_resolved,
+                max_content_length,
+                allowed_content_types,
+            )
+        )
+
+    def _on_gif_host_resolved(
+        self,
+        max_content_length: int,
+        allowed_content_types: set[str] | None,
+        future: Future[str | None],
+    ) -> bool:
+        if self.get_parent() is None or not self._resolving:
+            return GLib.SOURCE_REMOVE
+
+        self._resolving = False
+
+        try:
+            media_uri = future.result()
+        except Exception as error:
+            log.warning("GIF host resolve failed for %s: %s", self._uri, error)
+            media_uri = None
+
+        if media_uri is None:
+            self._info_message = _("Could not load GIF")
+            self._set_widget_state(PreviewState.OFFER_DOWNLOAD)
+            return GLib.SOURCE_REMOVE
+
+        log.info("Resolved GIF host %s -> %s", self._uri, media_uri)
+        self._media_uri = media_uri
+        self._filename = filename_from_uri(media_uri)
+        self._urlparts = urlparse(media_uri)
+        self._orig_path, self._thumb_path = get_image_paths(
+            media_uri,
+            self._urlparts,
+            app.settings.get("preview_size"),
+            self._orig_dir,
+            self._thumb_dir,
+        )
+        _icon, _file_type, mime_type = guess_simple_file_type(media_uri)
+        if mime_type:
+            self._mime_type = mime_type
+        self._file_control_buttons.set_file_name(self._filename)
+        self._mime_image.set_from_gicon(get_icon_for_mime_type(self._mime_type))
+
+        if self._orig_path.exists():
+            self._mime_type, self._file_size = get_size_and_mime_type(self._orig_path)
+            self._set_widget_state(PreviewState.DOWNLOADED)
+            self._set_widget_state(PreviewState.DISPLAY)
+            return GLib.SOURCE_REMOVE
+
+        self._download_content(max_content_length, allowed_content_types)
+        return GLib.SOURCE_REMOVE
 
     def _download_content(
         self,
         max_content_length: int = -1,
         allowed_content_types: set[str] | None = None,
     ) -> None:
-        log.info("Start downloading: %s %s", self._preview_id_short, self._uri)
+        download_uri = self._media_uri or self._uri
+        log.info("Start downloading: %s %s", self._preview_id_short, download_uri)
 
         obj = app.ftm.http_request(
             "GET",
-            self._uri,
+            download_uri,
             self._preview_id,
             output=self._orig_path,
             with_progress=True,

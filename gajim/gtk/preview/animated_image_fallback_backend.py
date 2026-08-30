@@ -149,7 +149,7 @@ class AnimatedImageFallbackBackend(GObject.Object, SignalManager):
         try:
             self._pipeline = typing.cast(Gst.Pipeline, Gst.parse_launch(pipeline))
         except Exception as e:
-            self._pipeline_setup_failed = False
+            self._pipeline_setup_failed = True
             self.emit("pipeline-changed", False)
             log.warning("Failed to setup pipeline: %s", e)
             return
@@ -216,9 +216,9 @@ class AnimatedImageFallbackBackend(GObject.Object, SignalManager):
         self._current_frame = (self._current_frame + 1) % len(self._frames)
         del buf
         self._push_id = GLib.timeout_add(duration, self._push_frame)
-        if self._current_frame == 0:
-            self._loop_counter = (self._loop_counter + 1) % self._max_loops
-            if self._loop_counter == 0:
+        if self._current_frame == 0 and self._max_loops > 0:
+            self._loop_counter += 1
+            if self._loop_counter >= self._max_loops:
                 self.pause()
         return False
 

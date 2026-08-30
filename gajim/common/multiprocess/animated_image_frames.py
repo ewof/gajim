@@ -33,3 +33,34 @@ def extract_frames(animated_image_path: Path) -> list[tuple[bytes, int]]:
             del frame
 
     return frames
+
+
+def extract_rgba_frames(
+    animated_image_path: Path,
+) -> tuple[int, int, list[tuple[bytes, int]]]:
+    """Decode an animated image into raw RGBA frames.
+
+    Used when GStreamer gtk4paintablesink is not available.
+    """
+    with Image.open(animated_image_path) as pil_img:
+        width, height = pil_img.size
+        frames: list[tuple[bytes, int]] = []
+        n_frames: int = getattr(pil_img, "n_frames", 1)
+        canvas = Image.new("RGBA", (width, height))
+
+        for i in range(n_frames):
+            pil_img.seek(i)
+            frame = pil_img.convert("RGBA")
+            if frame.size != (width, height):
+                composed = Image.new("RGBA", (width, height))
+                composed.paste(frame, (0, 0))
+                frame = composed
+            canvas = Image.alpha_composite(canvas, frame)
+            duration_ms = int(pil_img.info.get("duration", 100)) or 100
+            frames.append((canvas.tobytes(), duration_ms))
+            disposal = getattr(pil_img, "disposal_method", 1)
+            if disposal == 2:
+                canvas = Image.new("RGBA", (width, height))
+            del frame
+
+    return width, height, frames

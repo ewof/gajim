@@ -96,6 +96,7 @@ class MainWindow(Adw.ApplicationWindow, EventHelper):
     _app_side_bar: AppSideBar = Gtk.Template.Child()
     _main_stack: MainStack = Gtk.Template.Child()
     _toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
+    _media_lightbox: Gtk.Box = Gtk.Template.Child()
 
     def __init__(self) -> None:
         app.window = self
@@ -120,6 +121,9 @@ class MainWindow(Adw.ApplicationWindow, EventHelper):
         self._chat_page = self._main_stack.get_chat_page()
 
         self._prepare_window()
+
+    def get_media_lightbox_host(self) -> Gtk.Box:
+        return self._media_lightbox
 
     def init(self) -> None:
         """Init is called at a later point, so that the (empty) window can be
@@ -640,6 +644,12 @@ class MainWindow(Adw.ApplicationWindow, EventHelper):
     ) -> int | None:
         action_name = action.get_name()
         log.info("Activate action: %s", action_name)
+
+        if action_name == "escape":
+            from gajim.gtk.preview.media_lightbox import close_open_overlay
+
+            if close_open_overlay():
+                return None
 
         if action_name == "escape" and self._chat_page.hide_search():
             return None

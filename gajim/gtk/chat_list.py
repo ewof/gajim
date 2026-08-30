@@ -35,25 +35,63 @@ from gajim.common.util.user_strings import get_moderation_text
 from gajim.common.util.user_strings import get_retraction_text
 
 from gajim.gtk.chat_filter import ChatFilters
+from gajim.gtk.chat_filter import ChatTypeFilter
 from gajim.gtk.chat_list_row import ChatListRow
 from gajim.gtk.preview.preview import PreviewWidget
-from gajim.gtk.start_chat import ChatTypeFilter
 from gajim.gtk.util.classes import SignalManager
-from gajim.gtk.util.misc import get_listbox_row_count
 from gajim.gtk.util.misc import iterate_listbox_children
+from gajim.gtk.util.misc import scroll_to
 
 log = logging.getLogger("gajim.gtk.chatlist")
 
 
-class ChatList(Gtk.ListBox, EventHelper, SignalManager):
+class _ChatListBox(Gtk.ListBox):
+    def __init__(self, chat_list: ChatList) -> None:
+        Gtk.ListBox.__init__(self)
+        self._chat_list = chat_list
+
+        self.add_css_class("chatlist")
+        self.set_filter_func(chat_list._filter_func)
+        self.set_header_func(chat_list._header_func)
+        self.set_sort_func(chat_list._sort_func)
+
+        hover_controller = Gtk.EventControllerMotion()
+        chat_list._connect(hover_controller, "enter", chat_list._on_cursor_enter)
+        chat_list._connect(hover_controller, "leave", chat_list._on_cursor_leave)
+        self.add_controller(hover_controller)
+
+        chat_drop_target = Gtk.DropTarget(
+            formats=Gdk.ContentFormats.new_for_gtype(ChatListRow),
+            actions=Gdk.DragAction.MOVE,
+        )
+        chat_list._connect(chat_drop_target, "drop", chat_list._on_chat_drop)
+        self.add_controller(chat_drop_target)
+
+        file_drop_target = Gtk.DropTarget(
+            formats=Gdk.ContentFormats.new_for_gtype(PreviewWidget),
+            actions=Gdk.DragAction.COPY,
+        )
+        chat_list._connect(file_drop_target, "drop", chat_list._on_file_drop)
+        self.add_controller(file_drop_target)
+
+        chat_list._connect(self, "row-selected", chat_list._on_list_row_selected)
+
+
+class ChatList(Gtk.Box, EventHelper, SignalManager):
+    __gtype_name__ = "ChatList"
     __gsignals__ = {
         "chat-order-changed": (GObject.SignalFlags.RUN_LAST, None, ()),
+        "row-selected": (GObject.SignalFlags.RUN_LAST, None, (object,)),
     }
 
     def __init__(self, workspace_id: str) -> None:
-        Gtk.ListBox.__init__(self)
+        Gtk.Box.__init__(self, orientation=Gtk.Orientation.VERTICAL)
         EventHelper.__init__(self)
         SignalManager.__init__(self)
+
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+        self.add_css_class("chatlist-container")
 
         self._workspace_id = workspace_id
 
@@ -61,36 +99,44 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         self._current_filter: ChatFilters = ChatFilters()
         self._current_filter_text: str = ""
 
-        self.add_css_class("chatlist")
-        self.set_filter_func(self._filter_func)
-        self.set_header_func(self._header_func)
-        self.set_sort_func(self._sort_func)
-        self._set_placeholder()
-
         self._force_sort = False
         self._rows_need_sort = False
         self._context_menu_visible = False
         self._mouseover = False
         self._scheduled_sort_id = None
+        self._block_selection = False
+        self._paned_ready = False
+        self._split = app.settings.get("chat_list_split_groups")
 
-        hover_controller = Gtk.EventControllerMotion()
-        self._connect(hover_controller, "enter", self._on_cursor_enter)
-        self._connect(hover_controller, "leave", self._on_cursor_leave)
-        self.add_controller(hover_controller)
+        self._unified_list = _ChatListBox(self)
+        self._group_list = _ChatListBox(self)
+        self._direct_list = _ChatListBox(self)
 
-        chat_drop_target = Gtk.DropTarget(
-            formats=Gdk.ContentFormats.new_for_gtype(ChatListRow),
-            actions=Gdk.DragAction.MOVE,
+        self._unified_scrolled = self._make_scrolled(self._unified_list)
+        self._group_scrolled = self._make_scrolled(self._group_list)
+        self._direct_scrolled = self._make_scrolled(self._direct_list)
+
+        self._set_placeholder(self._unified_list, start_chat=True)
+        self._set_placeholder(self._group_list, text=_("No group chats"))
+        self._set_placeholder(self._direct_list, text=_("No chats"))
+
+        self._paned = Gtk.Paned(
+            orientation=Gtk.Orientation.VERTICAL,
+            wide_handle=True,
+            hexpand=True,
+            vexpand=True,
+            resize_start_child=True,
+            resize_end_child=True,
+            shrink_start_child=True,
+            shrink_end_child=True,
         )
-        self._connect(chat_drop_target, "drop", self._on_chat_drop)
-        self.add_controller(chat_drop_target)
-
-        file_drop_target = Gtk.DropTarget(
-            formats=Gdk.ContentFormats.new_for_gtype(PreviewWidget),
-            actions=Gdk.DragAction.COPY,
+        self._paned.add_css_class("chatlist-split-paned")
+        self._paned.set_start_child(
+            self._make_pane(_("Group Chats"), self._group_scrolled)
         )
-        self._connect(file_drop_target, "drop", self._on_file_drop)
-        self.add_controller(file_drop_target)
+        self._paned.set_end_child(self._make_pane(_("Chats"), self._direct_scrolled))
+        self._connect(self._paned, "notify::position", self._on_paned_position)
+        self._connect(self._paned, "notify::max-position", self._on_paned_max_position)
 
         self._chat_order: list[ChatListRow] = []
 
@@ -103,28 +149,131 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         )
 
         app.pulse_manager.add_callback(self._update_row_state)
+        app.settings.connect_signal("chat_list_split_groups", self._on_split_setting)
+
+        self._apply_layout()
 
     def do_unroot(self) -> None:
-        Gtk.ListBox.do_unroot(self)
+        Gtk.Box.do_unroot(self)
         self._disconnect_all()
         self.unregister_events()
         self._abort_scheduled_sort("unroot")
-        self.set_filter_func(None)
-        self.set_header_func(None)
-        self.set_sort_func(None)
+        app.settings.disconnect_signals(self)
+        for listbox in self._all_listboxes():
+            listbox.set_filter_func(None)
+            listbox.set_header_func(None)
+            listbox.set_sort_func(None)
         app.pulse_manager.remove_callback(self._update_row_state)
         app.check_finalize(self)
+
+    @staticmethod
+    def _make_scrolled(listbox: Gtk.ListBox) -> Gtk.ScrolledWindow:
+        scrolled = Gtk.ScrolledWindow(
+            hexpand=True,
+            vexpand=True,
+            hscrollbar_policy=Gtk.PolicyType.NEVER,
+            vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+        )
+        scrolled.set_child(listbox)
+        scrolled.add_css_class("no-border")
+        return scrolled
+
+    @staticmethod
+    def _make_pane(title: str, scrolled: Gtk.ScrolledWindow) -> Gtk.Box:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
+        label = Gtk.Label(label=title, xalign=0, hexpand=True)
+        label.add_css_class("dimmed")
+        label.add_css_class("bold")
+        label.add_css_class("chatlist-pane-label")
+        box.append(label)
+        box.append(scrolled)
+        return box
+
+    def _all_listboxes(self) -> tuple[_ChatListBox, _ChatListBox, _ChatListBox]:
+        return (self._unified_list, self._group_list, self._direct_list)
+
+    def _iter_listboxes(self) -> Iterator[_ChatListBox]:
+        if self._split:
+            yield self._group_list
+            yield self._direct_list
+        else:
+            yield self._unified_list
+
+    def _listbox_for_row(self, row: ChatListRow) -> _ChatListBox:
+        if not self._split:
+            return self._unified_list
+        if row.type == "groupchat":
+            return self._group_list
+        return self._direct_list
+
+    def _apply_layout(self) -> None:
+        while child := self.get_first_child():
+            self.remove(child)
+
+        self._paned_ready = False
+        if self._split:
+            self.append(self._paned)
+        else:
+            self.append(self._unified_scrolled)
+
+        self._reparent_rows()
+
+    def _reparent_rows(self) -> None:
+        for row in self._chats.values():
+            target = self._listbox_for_row(row)
+            parent = row.get_parent()
+            if parent is target:
+                continue
+            if parent is not None:
+                parent.remove(row)
+            target.append(row)
+
+        for listbox in self._iter_listboxes():
+            listbox.invalidate_filter()
+            listbox.invalidate_sort()
+
+    def _on_split_setting(self, value: bool, *args: Any) -> None:
+        if self._split == value:
+            return
+        self._split = value
+        self._apply_layout()
+
+    def _on_paned_max_position(self, paned: Gtk.Paned, *args: Any) -> None:
+        if self._paned_ready or not self._split:
+            return
+        height = paned.get_allocated_height()
+        if height <= 0:
+            return
+        saved = app.settings.get("chat_list_split_position")
+        if saved > 0:
+            paned.set_position(min(saved, max(48, height - 48)))
+        else:
+            paned.set_position(height // 2)
+        self._paned_ready = True
+
+    def _on_paned_position(self, paned: Gtk.Paned, *args: Any) -> None:
+        if not self._paned_ready or not self._split:
+            return
+        app.settings.set("chat_list_split_position", paned.get_position())
+
+    def scroll_to_top(self) -> None:
+        if self._split:
+            scroll_to(self._group_scrolled, "top")
+            scroll_to(self._direct_scrolled, "top")
+        else:
+            scroll_to(self._unified_scrolled, "top")
 
     @property
     def workspace_id(self) -> str:
         return self._workspace_id
 
     def get_row_count(self) -> int:
-        return get_listbox_row_count(self)
+        return sum(1 for _ in self._iterate_rows())
 
     def _iterate_rows(self) -> Iterator[ChatListRow]:
-        for row in iterate_listbox_children(self):
-            yield cast(ChatListRow, row)
+        for listbox in self._iter_listboxes():
+            for row in iterate_listbox_children(listbox):
+                yield cast(ChatListRow, row)
 
     def get_unread_count(self) -> int:
         return sum(chats.unread_count for chats in self._chats.values())
@@ -146,11 +295,13 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
 
     def set_filter(self, chat_filter: ChatFilters) -> None:
         self._current_filter = chat_filter
-        self.invalidate_filter()
+        for listbox in self._iter_listboxes():
+            listbox.invalidate_filter()
 
     def set_filter_text(self, text: str) -> None:
         self._current_filter_text = text
-        self.invalidate_filter()
+        for listbox in self._iter_listboxes():
+            listbox.invalidate_filter()
 
     def get_chat_type(
         self, account: str, jid: JID
@@ -161,10 +312,18 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         return None
 
     def get_selected_chat(self) -> ChatListRow | None:
-        row = cast(ChatListRow | None, self.get_selected_row())
-        if row is None:
-            return None
-        return row
+        for listbox in self._iter_listboxes():
+            row = cast(ChatListRow | None, listbox.get_selected_row())
+            if row is not None:
+                return row
+        return None
+
+    def unselect_all(self) -> None:
+        self._block_selection = True
+        for listbox in self._all_listboxes():
+            listbox.unselect_all()
+        self._block_selection = False
+        self.emit("row-selected", None)
 
     def get_open_chats(self) -> OpenChatsSettingT:
         open_chats: OpenChatsSettingT = []
@@ -222,46 +381,47 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         row.connect("unread-changed", self._on_row_unread_changed)
         row.connect("context-menu-state-changed", self._on_context_menu_state_changed)
 
-        self.append(row)
+        self._listbox_for_row(row).append(row)
 
     def select_chat(self, account: str, jid: JID) -> None:
         row = self._chats[(account, jid)]
-        self.select_row(row)
+        self._listbox_for_row(row).select_row(row)
 
     def select_next_chat(
         self, direction: Direction, unread_first: bool = False
     ) -> None:
         # Selects the next chat, but prioritizes chats with unread messages.
+        rows = list(self._iterate_rows())
+        if not rows:
+            return
+
         row = self.get_selected_chat()
         if row is None:
-            row = self.get_row_at_index(0)
-            if row is None:
-                return
-            assert isinstance(row, ChatListRow)
-            self.select_chat(row.account, row.jid)
+            self.select_chat(rows[0].account, rows[0].jid)
+            return
+
+        try:
+            current = rows.index(row)
+        except ValueError:
+            self.select_chat(rows[0].account, rows[0].jid)
             return
 
         unread_found = False
         if unread_first:
-            index = row.get_index()
-            current = index
-
-            # Loop until finding a chat with unread count or completing a cycle
+            index = current
             while True:
                 if direction == Direction.NEXT:
                     index += 1
-                    if index >= self.get_row_count():
+                    if index >= len(rows):
                         index = 0
                 else:
                     index -= 1
                     if index < 0:
-                        index = self.get_row_count() - 1
+                        index = len(rows) - 1
 
-                row = self.get_row_at_index(index)
-                if row is None:
-                    return
-                assert isinstance(row, ChatListRow)
-                if row.unread_count > 0:
+                candidate = rows[index]
+                if candidate.unread_count > 0:
+                    row = candidate
                     unread_found = True
                     break
                 if index == current:
@@ -271,28 +431,16 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
             self.select_chat(row.account, row.jid)
             return
 
-        index = row.get_index()
         if direction == Direction.NEXT:
-            next_row = self.get_row_at_index(index + 1)
+            next_row = rows[(current + 1) % len(rows)]
         else:
-            next_row = self.get_row_at_index(index - 1)
-        if next_row is None:
-            if direction == Direction.NEXT:
-                next_row = self.get_row_at_index(0)
-            else:
-                last = self.get_row_count() - 1
-                next_row = self.get_row_at_index(last)
-            assert isinstance(next_row, ChatListRow)
-            self.select_chat(next_row.account, next_row.jid)
-            return
-
-        assert isinstance(next_row, ChatListRow)
+            next_row = rows[(current - 1) % len(rows)]
         self.select_chat(next_row.account, next_row.jid)
 
     def select_chat_number(self, number: int) -> None:
-        row = self.get_row_at_index(number)
-        if row is not None:
-            assert isinstance(row, ChatListRow)
+        rows = list(self._iterate_rows())
+        if 0 <= number < len(rows):
+            row = rows[number]
             self.select_chat(row.account, row.jid)
 
     def get_chat_list_rows(self) -> list[ChatListRow]:
@@ -303,7 +451,10 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
 
         if row.is_pinned:
             self._chat_order.remove(row)
-        self.remove(row)
+
+        parent = row.get_parent()
+        if parent is not None:
+            parent.remove(row)
 
         if emit_unread:
             self._emit_unread_changed()
@@ -345,16 +496,32 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         else:
             log.warning("Unhandled Event: %s", event.name)
 
-    def _set_placeholder(self) -> None:
-        button = Gtk.Button(
-            label=_("Start Chat"),
+    def _set_placeholder(
+        self,
+        listbox: Gtk.ListBox,
+        *,
+        start_chat: bool = False,
+        text: str | None = None,
+    ) -> None:
+        if start_chat:
+            button = Gtk.Button(
+                label=_("Start Chat"),
+                halign=Gtk.Align.CENTER,
+                valign=Gtk.Align.CENTER,
+                action_name="app.start-chat",
+                action_target=GLib.Variant("as", ["", ""]),
+            )
+            button.add_css_class("suggested-action")
+            listbox.set_placeholder(button)
+            return
+
+        placeholder = Gtk.Label(
+            label=text or "",
             halign=Gtk.Align.CENTER,
             valign=Gtk.Align.CENTER,
-            action_name="app.start-chat",
-            action_target=GLib.Variant("as", ["", ""]),
         )
-        button.add_css_class("suggested-action")
-        self.set_placeholder(button)
+        placeholder.add_css_class("dimmed")
+        listbox.set_placeholder(placeholder)
 
     def _emit_unread_changed(self) -> None:
         count = self.get_unread_count()
@@ -362,23 +529,20 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         assert chat_list_stack is not None
         chat_list_stack.emit("unread-count-changed", self._workspace_id, count)
 
-    def _get_row_before(self, row: ChatListRow) -> ChatListRow | None:
-        row_before = self.get_row_at_index(row.get_index() - 1)
-        if row_before is None:
+    def _on_list_row_selected(
+        self, listbox: Gtk.ListBox, row: ChatListRow | None
+    ) -> None:
+        if self._block_selection:
             return
-        return cast(ChatListRow, row_before)
 
-    def _get_row_after(self, row: ChatListRow) -> ChatListRow | None:
-        row_after = self.get_row_at_index(row.get_index() + 1)
-        if row_after is None:
-            return
-        return cast(ChatListRow, row_after)
+        if row is not None:
+            self._block_selection = True
+            for other in self._all_listboxes():
+                if other is not listbox:
+                    other.unselect_all()
+            self._block_selection = False
 
-    def _get_last_row(self) -> ChatListRow:
-        index = self.get_row_count() - 1
-        last_row = self.get_row_at_index(index)
-        assert last_row is not None
-        return cast(ChatListRow, last_row)
+        self.emit("row-selected", row)
 
     def _on_row_unread_changed(self, row: ChatListRow) -> None:
         self._emit_unread_changed()
@@ -390,9 +554,12 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         self._schedule_sort()
 
     def _on_file_drop(
-        self, _drop_target: Gtk.DropTarget, value: GObject.Value, _x: float, y: float
+        self, drop_target: Gtk.DropTarget, value: GObject.Value, _x: float, y: float
     ) -> bool:
-        target_row = self.get_row_at_y(int(y))
+        listbox = drop_target.get_widget()
+        if not isinstance(listbox, Gtk.ListBox):
+            return False
+        target_row = listbox.get_row_at_y(int(y))
         if not value or not isinstance(target_row, ChatListRow):
             # Reject drop
             return False
@@ -412,9 +579,12 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         return False
 
     def _on_chat_drop(
-        self, _drop_target: Gtk.DropTarget, value: GObject.Value, _x: float, y: float
+        self, drop_target: Gtk.DropTarget, value: GObject.Value, _x: float, y: float
     ) -> bool:
-        target_row = self.get_row_at_y(int(y))
+        listbox = drop_target.get_widget()
+        if not isinstance(listbox, Gtk.ListBox):
+            return False
+        target_row = listbox.get_row_at_y(int(y))
         if not value or not isinstance(target_row, ChatListRow):
             # Reject drop
             return False
@@ -515,7 +685,7 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
 
         return 0
 
-    def invalidate_sort(self, *, force: bool = False) -> bool:  # type: ignore
+    def invalidate_sort(self, *, force: bool = False) -> bool:
         log.debug("Try sorting chatlist")
         if not force and self._is_sort_inhibited():
             log.debug("Abort sorting because it is inhibited")
@@ -523,7 +693,8 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
 
         self._rows_need_sort = False
         self._force_sort = force
-        Gtk.ListBox.invalidate_sort(self)
+        for listbox in self._iter_listboxes():
+            listbox.invalidate_sort()
         self._force_sort = False
         log.debug("Sorting successful")
         return True
@@ -693,9 +864,9 @@ class ChatList(Gtk.ListBox, EventHelper, SignalManager):
         row.set_message_text(_("File"), icon_name="lucide-paperclip-symbolic")
 
     def _on_account_changed(self, *args: Any) -> None:
-        for row in self._iterate_rows():
+        for row in self._chats.values():
             row.update_account_identifier()
 
     def _on_bookmarks_received(self, _event: events.BookmarksReceived) -> None:
-        for row in self._iterate_rows():
+        for row in self._chats.values():
             row.update_name()
