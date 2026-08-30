@@ -154,6 +154,8 @@ class ChatList(Gtk.Box, EventHelper, SignalManager):
         self._apply_layout()
 
     def do_unroot(self) -> None:
+        for row in self._chats.values():
+            row.dispose()
         Gtk.Box.do_unroot(self)
         self._disconnect_all()
         self.unregister_events()
@@ -207,16 +209,16 @@ class ChatList(Gtk.Box, EventHelper, SignalManager):
         return self._direct_list
 
     def _apply_layout(self) -> None:
-        while child := self.get_first_child():
-            self.remove(child)
-
         self._paned_ready = False
+        self._reparent_rows()
+
+        current = self.get_first_child()
+        if current is not None:
+            self.remove(current)
         if self._split:
             self.append(self._paned)
         else:
             self.append(self._unified_scrolled)
-
-        self._reparent_rows()
 
     def _reparent_rows(self) -> None:
         for row in self._chats.values():
@@ -452,6 +454,7 @@ class ChatList(Gtk.Box, EventHelper, SignalManager):
         if row.is_pinned:
             self._chat_order.remove(row)
 
+        row.dispose()
         parent = row.get_parent()
         if parent is not None:
             parent.remove(row)

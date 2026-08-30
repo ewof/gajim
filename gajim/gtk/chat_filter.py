@@ -7,9 +7,9 @@ from __future__ import annotations
 from typing import Any
 
 import dataclasses
-from collections.abc import Iterator
 from enum import Enum
 
+from gi.repository import Gdk
 from gi.repository import GObject
 from gi.repository import Gtk
 
@@ -33,23 +33,6 @@ class ChatFilters:
     account: str | None = None
 
 
-def _iter_widget_children(widget: Gtk.Widget) -> Iterator[Gtk.Widget]:
-    child = widget.get_first_child()
-    while child is not None:
-        yield child
-        child = child.get_next_sibling()
-
-
-def _find_child_popover(widget: Gtk.Widget) -> Gtk.Popover | None:
-    for child in _iter_widget_children(widget):
-        if isinstance(child, Gtk.Popover):
-            return child
-        found = _find_child_popover(child)
-        if found is not None:
-            return found
-    return None
-
-
 class ChatFilter(Gtk.Overlay, SignalManager):
     __gtype_name__ = "ChatFilter"
 
@@ -62,7 +45,6 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         SignalManager.__init__(self)
 
         self._block_signal = False
-        self._inner_popover_count = 0
 
         self._toggle_button = Gtk.ToggleButton()
         self._connect(self._toggle_button, "notify::active", self._on_toggle_button)
@@ -80,12 +62,15 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._filter_active_dot.add_css_class("chat-filter-active")
         self.add_overlay(self._filter_active_dot)
 
-        # Gtk.DropDown opens its own popover. Nested popovers inside a
-        # Gtk.MenuButton popover can leave the grab in a state where the
-        # filter popup can no longer be closed. Manage it ourselves.
-        self._popover = Gtk.Popover(autohide=True, cascade_popdown=False)
+        # Nested DropDowns inside a grabbing popover steal the seat, which
+        # blocks window-manager shortcuts. No autohide grab; the toggle
+        # (and Escape) close it.
+        self._popover = Gtk.Popover(autohide=False, cascade_popdown=False)
         self._popover.set_parent(self._toggle_button)
         self._connect(self._popover, "closed", self._on_popover_closed)
+        key = Gtk.EventControllerKey()
+        self._connect(key, "key-pressed", self._on_popover_key_pressed)
+        self._popover.add_controller(key)
 
         popover_content = Gtk.Grid(row_spacing=6, column_spacing=12)
         popover_content.add_css_class("p-6")
@@ -156,10 +141,6 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._connect(reset_button, "clicked", self._on_reset_button_clicked)
         popover_content.attach(reset_button, 0, 5, 2, 1)
 
-        self._watch_dropdown_popover(self._chat_type_drop_down)
-        self._watch_dropdown_popover(self._roster_groups_drop_down)
-        self._watch_dropdown_popover(self._account_drop_down)
-
         app.settings.connect_signal("chat_list_split_groups", self._on_split_setting)
         self._populate_dropdowns()
 
@@ -198,47 +179,34 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._roster_groups_drop_down.set_selected(0)
         self._account_drop_down.set_selected(0)
 
-    def _watch_dropdown_popover(self, dropdown: Gtk.DropDown) -> None:
-        def _on_realize(_dropdown: Gtk.DropDown) -> None:
-            popover = _find_child_popover(dropdown)
-            if popover is None:
-                return
-            self._connect(popover, "show", self._on_inner_popover_show)
-            self._connect(popover, "hide", self._on_inner_popover_hide)
-            if popover.get_visible():
-                self._on_inner_popover_show(popover)
-
-        self._connect(dropdown, "realize", _on_realize)
-
-    def _on_inner_popover_show(self, _popover: Gtk.Popover) -> None:
-        self._inner_popover_count += 1
-        self._popover.set_autohide(False)
-
-    def _on_inner_popover_hide(self, _popover: Gtk.Popover) -> None:
-        self._inner_popover_count = max(0, self._inner_popover_count - 1)
-        if self._inner_popover_count == 0:
-            self._popover.set_autohide(True)
-
     def _on_toggle_button(self, button: Gtk.ToggleButton, *args: Any) -> None:
         if button.get_active():
             if not self._popover.get_visible():
                 self._populate_dropdowns()
                 self._popover.popup()
+                self._toggle_button.grab_focus()
             return
 
         if self._popover.get_visible():
             self._popover.popdown()
 
     def _on_popover_closed(self, _popover: Gtk.Popover) -> None:
-        self._inner_popover_count = 0
-        self._popover.set_autohide(True)
         if self._toggle_button.get_active():
             self._toggle_button.set_active(False)
 
-    def _populate_dropdowns(self) -> None:
-        if self._inner_popover_count:
-            return
+    def _on_popover_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        if keyval == Gdk.KEY_Escape:
+            self._toggle_button.set_active(False)
+            return Gdk.EVENT_STOP
+        return Gdk.EVENT_PROPAGATE
 
+    def _populate_dropdowns(self) -> None:
         roster_group_key = self._roster_groups_drop_down.get_selected_key()
         account_key = self._account_drop_down.get_selected_key()
 

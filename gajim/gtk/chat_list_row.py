@@ -65,6 +65,7 @@ class ChatListRow(Gtk.ListBoxRow, SignalManager):
         self.type = type_
         self.position = position
         self._has_draft = False
+        self._disposed = False
 
         self._conversations_header = RowHeader(RowHeaderType.CONVERSATIONS)
         self._pinned_header = RowHeader(RowHeaderType.PINNED)
@@ -417,19 +418,27 @@ class ChatListRow(Gtk.ListBoxRow, SignalManager):
         else:
             self._ui.revealer.set_reveal_child(False)
 
-    def do_unroot(self) -> None:
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self._disconnect_all()
-
         app.settings.disconnect_signals(self)
-
         self._client.disconnect_all_from_obj(self)
         self.contact.disconnect_all_from_obj(self)
         if isinstance(self.contact, GroupchatParticipant):
             self.contact.room.disconnect_all_from_obj(self)
 
-        del self._menu_popover
+    def do_unroot(self) -> None:
+        # ListBox rows are unrooted when moved between lists (split layout).
+        # Only tear the row down when it is actually being discarded.
+        if self._disposed:
+            if hasattr(self, "_menu_popover"):
+                del self._menu_popover
+            Gtk.ListBoxRow.do_unroot(self)
+            app.check_finalize(self)
+            return
         Gtk.ListBoxRow.do_unroot(self)
-        app.check_finalize(self)
 
     def _on_close_button_clicked(self, _button: Gtk.Button) -> None:
         self.reset_unread()
