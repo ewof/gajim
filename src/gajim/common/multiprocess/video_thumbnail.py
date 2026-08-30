@@ -145,6 +145,13 @@ def extract_video_thumbnail_and_properties(
     pipeline.set_state(Gst.State.PLAYING)
     sample = appsink.emit("try-pull-sample", 2 * Gst.SECOND)
 
+    if sample is None and timestamp_ms != 0:
+        # Accurate mid-stream seeks fail on some GIF-like MP4s (OpenH264 B-frames).
+        pipeline.seek_simple(
+            Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0
+        )
+        sample = appsink.emit("try-pull-sample", 2 * Gst.SECOND)
+
     if sample is None:
         cleanup()
         raise Exception(f"\n{__name__}: Failed to retrieve sample")

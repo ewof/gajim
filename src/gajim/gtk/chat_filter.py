@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 import dataclasses
+from collections.abc import Iterator
 from enum import Enum
 
 from gi.repository import GObject
@@ -32,6 +33,23 @@ class ChatFilters:
     account: str | None = None
 
 
+def _iter_widget_children(widget: Gtk.Widget) -> Iterator[Gtk.Widget]:
+    child = widget.get_first_child()
+    while child is not None:
+        yield child
+        child = child.get_next_sibling()
+
+
+def _find_child_popover(widget: Gtk.Widget) -> Gtk.Popover | None:
+    for child in _iter_widget_children(widget):
+        if isinstance(child, Gtk.Popover):
+            return child
+        found = _find_child_popover(child)
+        if found is not None:
+            return found
+    return None
+
+
 class ChatFilter(Gtk.Overlay, SignalManager):
     __gtype_name__ = "ChatFilter"
 
@@ -44,12 +62,13 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         SignalManager.__init__(self)
 
         self._block_signal = False
+        self._inner_popover_count = 0
 
-        menu_button = Gtk.MenuButton()
-        self._connect(menu_button, "notify::active", self._on_menu_button_activated)
+        self._toggle_button = Gtk.ToggleButton()
+        self._connect(self._toggle_button, "notify::active", self._on_toggle_button)
         icon = Gtk.Image.new_from_icon_name("lucide-list-filter-symbolic")
-        menu_button.set_child(icon)
-        self.set_child(menu_button)
+        self._toggle_button.set_child(icon)
+        self.set_child(self._toggle_button)
 
         self._filter_active_dot = Gtk.Box(
             halign=Gtk.Align.END,
@@ -61,8 +80,12 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._filter_active_dot.add_css_class("chat-filter-active")
         self.add_overlay(self._filter_active_dot)
 
-        self._popover = Gtk.Popover(autohide=True, cascade_popdown=True)
-        menu_button.set_popover(self._popover)
+        # Gtk.DropDown opens its own popover. Nested popovers inside a
+        # Gtk.MenuButton popover can leave the grab in a state where the
+        # filter popup can no longer be closed. Manage it ourselves.
+        self._popover = Gtk.Popover(autohide=True, cascade_popdown=False)
+        self._popover.set_parent(self._toggle_button)
+        self._connect(self._popover, "closed", self._on_popover_closed)
 
         popover_content = Gtk.Grid(row_spacing=6, column_spacing=12)
         popover_content.add_css_class("p-6")
@@ -118,20 +141,36 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         )
         popover_content.attach(self._account_drop_down, 1, 3, 1, 1)
 
+        split_label = Gtk.Label(label=_("Separate Group Chats"), halign=Gtk.Align.END)
+        split_label.add_css_class("dimmed")
+        popover_content.attach(split_label, 0, 4, 1, 1)
+
+        self._split_switch = Gtk.Switch(halign=Gtk.Align.START, valign=Gtk.Align.CENTER)
+        self._split_switch.set_active(app.settings.get("chat_list_split_groups"))
+        self._connect(self._split_switch, "notify::active", self._on_split_changed)
+        popover_content.attach(self._split_switch, 1, 4, 1, 1)
+
         reset_button = Gtk.Button(
             label=_("Reset Filters"), halign=Gtk.Align.CENTER, margin_top=6
         )
         self._connect(reset_button, "clicked", self._on_reset_button_clicked)
-        popover_content.attach(reset_button, 0, 4, 2, 1)
+        popover_content.attach(reset_button, 0, 5, 2, 1)
 
+        self._watch_dropdown_popover(self._chat_type_drop_down)
+        self._watch_dropdown_popover(self._roster_groups_drop_down)
+        self._watch_dropdown_popover(self._account_drop_down)
+
+        app.settings.connect_signal("chat_list_split_groups", self._on_split_setting)
         self._populate_dropdowns()
 
     def do_unroot(self) -> None:
-        Gtk.Overlay.do_unroot(self)
+        app.settings.disconnect_signals(self)
         self._disconnect_all()
         self._chat_type_drop_down.run_destroy()
         self._roster_groups_drop_down.run_destroy()
         self._account_drop_down.run_destroy()
+        self._popover.unparent()
+        Gtk.Overlay.do_unroot(self)
         app.check_finalize(self)
 
     def get_filters(self) -> ChatFilters:
@@ -159,15 +198,47 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._roster_groups_drop_down.set_selected(0)
         self._account_drop_down.set_selected(0)
 
-    def _on_menu_button_activated(
-        self, menu_button: Gtk.MenuButton, *args: Any
-    ) -> None:
-        if not menu_button.get_active():
+    def _watch_dropdown_popover(self, dropdown: Gtk.DropDown) -> None:
+        def _on_realize(_dropdown: Gtk.DropDown) -> None:
+            popover = _find_child_popover(dropdown)
+            if popover is None:
+                return
+            self._connect(popover, "show", self._on_inner_popover_show)
+            self._connect(popover, "hide", self._on_inner_popover_hide)
+            if popover.get_visible():
+                self._on_inner_popover_show(popover)
+
+        self._connect(dropdown, "realize", _on_realize)
+
+    def _on_inner_popover_show(self, _popover: Gtk.Popover) -> None:
+        self._inner_popover_count += 1
+        self._popover.set_autohide(False)
+
+    def _on_inner_popover_hide(self, _popover: Gtk.Popover) -> None:
+        self._inner_popover_count = max(0, self._inner_popover_count - 1)
+        if self._inner_popover_count == 0:
+            self._popover.set_autohide(True)
+
+    def _on_toggle_button(self, button: Gtk.ToggleButton, *args: Any) -> None:
+        if button.get_active():
+            if not self._popover.get_visible():
+                self._populate_dropdowns()
+                self._popover.popup()
             return
 
-        self._populate_dropdowns()
+        if self._popover.get_visible():
+            self._popover.popdown()
+
+    def _on_popover_closed(self, _popover: Gtk.Popover) -> None:
+        self._inner_popover_count = 0
+        self._popover.set_autohide(True)
+        if self._toggle_button.get_active():
+            self._toggle_button.set_active(False)
 
     def _populate_dropdowns(self) -> None:
+        if self._inner_popover_count:
+            return
+
         roster_group_key = self._roster_groups_drop_down.get_selected_key()
         account_key = self._account_drop_down.get_selected_key()
 
@@ -199,7 +270,6 @@ class ChatFilter(Gtk.Overlay, SignalManager):
             self.set_tooltip_text(_("Filters"))
 
         self._filter_active_dot.set_visible(active)
-        self._popover.grab_focus()
 
     def _on_chat_type_selected(
         self, _dropdown: GajimDropDown[ChatTypeFilter], *args: Any
@@ -221,6 +291,13 @@ class ChatFilter(Gtk.Overlay, SignalManager):
         self._update()
         if not self._block_signal:
             self.emit("filter-changed")
+
+    def _on_split_changed(self, switch: Gtk.Switch, *args: Any) -> None:
+        app.settings.set("chat_list_split_groups", switch.get_active())
+
+    def _on_split_setting(self, value: bool, *args: Any) -> None:
+        if self._split_switch.get_active() != value:
+            self._split_switch.set_active(value)
 
     def _on_reset_button_clicked(self, _button: Gtk.Button) -> None:
         self.reset()

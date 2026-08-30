@@ -43,6 +43,8 @@
     <property name="width-request">360</property>
     <property name="height-request">360</property>
     <property name="content">
+      <object class="GtkOverlay" id="_window_overlay">
+        <child>
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar" id="_header_bar">
@@ -93,6 +95,21 @@
             </child>
           </object>
         </property>
+      </object>
+        </child>
+        <child type="overlay">
+          <object class="GtkBox" id="_media_lightbox">
+            <property name="visible">False</property>
+            <property name="hexpand">True</property>
+            <property name="vexpand">True</property>
+            <property name="halign">fill</property>
+            <property name="valign">fill</property>
+            <property name="can-target">True</property>
+            <style>
+              <class name="media-lightbox"/>
+            </style>
+          </object>
+        </child>
       </object>
     </property>
     <child>

@@ -169,6 +169,7 @@ APP_ACTIONS = [
     ("add-contact", "s"),
     ("content", None),
     ("copy-text", "s"),
+    ("copy-image", "s"),
     ("create-groupchat", "s"),
     ("faq", None),
     ("privacy-policy", None),

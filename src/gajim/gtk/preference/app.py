@@ -397,10 +397,14 @@ class FilePreviewGroup(GajimPreferencesGroup):
             ),
             Setting(
                 SettingKind.SWITCH,
-                _("Preview all Image URLs"),
+                _("Preview Media URLs"),
                 SettingType.CONFIG,
                 "preview_allow_all_images",
-                desc=_("Show previews for any URLs containing images (may be unsafe)"),
+                desc=_(
+                    "Show inline previews for any URLs pointing to images, "
+                    "GIFs, audio, or video, including Tenor and Klipy pages "
+                    "(may be unsafe)"
+                ),
             ),
             Setting(
                 SettingKind.SWITCH,

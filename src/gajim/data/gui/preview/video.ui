@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <template class="VideoPreviewWidget" parent="GtkBox">
+    <child>
+      <object class="GtkStack" id="_stack">
+        <property name="hhomogeneous">0</property>
+        <property name="vhomogeneous">0</property>
+        <property name="halign">start</property>
+        <property name="transition-duration">50</property>
+        <property name="transition-type">crossfade</property>
+        <child>
+          <object class="GtkStackPage">
+            <property name="name">loading</property>
+            <property name="child">
+              <object class="LoadingBox">
+                <property name="height-request">100</property>
+              </object>
+            </property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkStackPage">
+            <property name="name">preview</property>
+            <property name="child">
+              <object class="GtkBox">
+                <property name="can-focus">0</property>
+                <property name="halign">start</property>
+                <child>
+                  <object class="AdwClamp" id="_content_clamp">
+                    <property name="halign">start</property>
+                    <property name="unit">px</property>
+                    <property name="child">
+                      <object class="GtkOverlay" id="_content_overlay">
+                        <property name="can-focus">0</property>
+                        <child type="overlay">
+                          <object class="FileControlButtons" id="_file_control_buttons">
+                            <property name="visible">false</property>
+                            <style>
+                              <class name="preview-image-overlay"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child type="overlay">
+                          <object class="GtkImage" id="_play_image">
+                            <property name="can-target">false</property>
+                            <property name="vexpand">true</property>
+                            <property name="hexpand">true</property>
+                            <property name="icon-name">lucide-video-play</property>
+                          </object>
+                        </child>
+                        <child type="overlay">
+                          <object class="GtkBox" id="_controls_box">
+                            <property name="valign">end</property>
+                            <property name="visible">false</property>
+                            <property name="spacing">6</property>
+                            <child>
+                              <object class="GtkButton" id="_play_pause_button">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Play</property>
+                                <child>
+                                  <object class="GtkImage" id="_play_icon">
+                                    <property name="icon-name">lucide-play-symbolic</property>
+                                  </object>
+                                </child>
+                                <style>
+                                  <class name="circular"/>
+                                  <class name="flat"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkAdjustment" id="_seek_adj">
+                                <property name="lower">0</property>
+                                <property name="upper">1</property>
+                                <property name="value">0</property>
+                                <property name="step-increment">0.01</property>
+                                <property name="page-increment">0.1</property>
+                              </object>
+                              <object class="GtkScale" id="_seek_bar">
+                                <property name="hexpand">true</property>
+                                <property name="draw-value">false</property>
+                                <property name="restrict-to-fill-level">0</property>
+                                <property name="adjustment">_seek_adj</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkLabel" id="_progress_label">
+                                <property name="label">0:00/0:00</property>
+                                <property name="valign">center</property>
+                                <style>
+                                  <class name="numeric"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="_mute_button">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Mute</property>
+                                <child>
+                                  <object class="GtkImage" id="_volume_icon">
+                                    <property name="icon-name">audio-volume-high-symbolic</property>
+                                  </object>
+                                </child>
+                                <style>
+                                  <class name="circular"/>
+                                  <class name="flat"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkAdjustment" id="_volume_adj">
+                                <property name="lower">0</property>
+                                <property name="upper">1</property>
+                                <property name="value">1</property>
+                                <property name="step-increment">0.05</property>
+                                <property name="page-increment">0.1</property>
+                              </object>
+                              <object class="GtkScale" id="_volume_bar">
+                                <property name="valign">center</property>
+                                <property name="width-request">80</property>
+                                <property name="hexpand">false</property>
+                                <property name="draw-value">false</property>
+                                <property name="restrict-to-fill-level">0</property>
+                                <property name="adjustment">_volume_adj</property>
+                                <property name="tooltip-text" translatable="yes">Volume</property>
+                                <style>
+                                  <class name="preview-video-volume"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="_fullscreen_button">
+                                <property name="valign">center</property>
+                                <property name="tooltip-text" translatable="yes">Fullscreen</property>
+                                <child>
+                                  <object class="GtkImage">
+                                    <property name="icon-name">lucide-maximize-symbolic</property>
+                                  </object>
+                                </child>
+                                <style>
+                                  <class name="circular"/>
+                                  <class name="flat"/>
+                                </style>
+                              </object>
+                            </child>
+                            <style>
+                              <class name="preview-video-controls"/>
+                            </style>
+                          </object>
+                        </child>
+                        <property name="child">
+                          <object class="GtkPicture" id="_picture">
+                            <property name="content-fit">contain</property>
+                            <style>
+                              <class name="preview-image"/>
+                            </style>
+                          </object>
+                        </property>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </template>
+</interface>

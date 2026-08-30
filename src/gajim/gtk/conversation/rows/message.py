@@ -29,9 +29,11 @@ from gajim.common.storage.archive.const import MessageState
 from gajim.common.storage.archive.const import MessageType
 from gajim.common.storage.archive.models import Message
 from gajim.common.types import ChatContactT
+from gajim.common.util.gif_hosts import is_gif_host_page
 from gajim.common.util.muc import message_needs_highlight
 from gajim.common.util.preview import GeoPreview
 from gajim.common.util.preview import get_preview_data
+from gajim.common.util.preview import iter_direct_media_urls
 from gajim.common.util.preview import UrlPreview
 from gajim.common.util.text import format_fingerprint
 from gajim.common.util.user_strings import get_moderation_text
@@ -192,9 +194,22 @@ class MessageRow(BaseRow):
 
         match preview := get_preview_data(self.text, message.oob):
             case UrlPreview():
-                self._message_widget = PreviewWidget(
+                preview_widget = PreviewWidget(
                     self._contact.account, preview, self._is_outgoing, self._muc_context
                 )
+                if preview.from_link:
+                    link_widget = MessageWidget(self._contact.account)
+                    link_widget.add_with_styling(self.text, nickname=self.name)
+                    if self._contact.is_groupchat and not self._is_outgoing:
+                        self._apply_highlight(self.text)
+                    combined = Gtk.Box(
+                        orientation=Gtk.Orientation.VERTICAL, spacing=6
+                    )
+                    combined.append(link_widget)
+                    combined.append(preview_widget)
+                    self._message_widget = combined
+                else:
+                    self._message_widget = preview_widget
 
             case GeoPreview():
                 self._message_widget = GeoPreviewWidget(preview)
@@ -220,6 +235,7 @@ class MessageRow(BaseRow):
 
         box.append(self._message_widget)
 
+        og_urls: set[str] = set()
         if message.og and self._contact.settings.get("enable_link_preview"):
             og_box = Gtk.Box(
                 orientation=Gtk.Orientation.VERTICAL,
@@ -232,13 +248,45 @@ class MessageRow(BaseRow):
                 tightening_threshold=600,
                 halign=Gtk.Align.START,
             )
+            media_preview_on = app.settings.get("preview_allow_all_images")
             for og in message.og:
+                # Prefer the inline player for Tenor/Klipy over a static OG card
+                if media_preview_on and is_gif_host_page(og.about):
+                    continue
+                og_urls.add(og.about)
                 og_data = OpenGraphData.from_model(og)
                 og_box.append(
                     OpenGraphPreviewWidget(og.about, og_data=og_data, pk=og.pk)
                 )
 
-            box.append(og_clamp)
+            if og_box.get_first_child() is not None:
+                box.append(og_clamp)
+
+        # Standalone media URL messages are already PreviewWidget via
+        # get_preview_data. Embed remaining direct media links in the text
+        # when the user opted in to previewing arbitrary media URLs.
+        if not isinstance(preview, UrlPreview) and app.settings.get(
+            "preview_allow_all_images"
+        ):
+            media_urls = [
+                url for url in iter_direct_media_urls(self.text) if url not in og_urls
+            ]
+            if media_urls:
+                media_box = Gtk.Box(
+                    orientation=Gtk.Orientation.VERTICAL,
+                    margin_top=6,
+                    spacing=6,
+                )
+                for url in media_urls:
+                    media_box.append(
+                        PreviewWidget(
+                            self._contact.account,
+                            UrlPreview.from_uri(url, from_link=True),
+                            self._is_outgoing,
+                            self._muc_context,
+                        )
+                    )
+                box.append(media_box)
 
         self._bottom_box.append(box)
 
@@ -316,13 +364,21 @@ class MessageRow(BaseRow):
         copy_text += text
         return copy_text
 
-    def enable_selection_mode(self) -> None:
+    def _plain_message_widget(self) -> MessageWidget | None:
         if isinstance(self._message_widget, MessageWidget):
-            self._message_widget.set_selectable(False)
+            return self._message_widget
+        child = self._message_widget.get_first_child()
+        if isinstance(child, MessageWidget):
+            return child
+        return None
+
+    def enable_selection_mode(self) -> None:
+        if widget := self._plain_message_widget():
+            widget.set_selectable(False)
 
     def disable_selection_mode(self) -> None:
-        if isinstance(self._message_widget, MessageWidget):
-            self._message_widget.set_selectable(True)
+        if widget := self._plain_message_widget():
+            widget.set_selectable(True)
 
     def _get_security_labels_data(
         self, security_labels: mod.SecurityLabel | None
@@ -417,7 +473,11 @@ class MessageRow(BaseRow):
         return abs(message.timestamp - self.timestamp) < MERGE_TIMEFRAME
 
     def get_text(self) -> str:
-        return self._message_widget.get_text()
+        if widget := self._plain_message_widget():
+            return widget.get_text()
+        if isinstance(self._message_widget, PreviewWidget | GeoPreviewWidget):
+            return self._message_widget.get_text()
+        return self.text
 
     def _get_encryption_data(
         self,
