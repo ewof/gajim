@@ -89,9 +89,6 @@ class AnimatedImageTextureBackend(GObject.Object, SignalManager):
         if not self._playing:
             return
         self._playing = False
-        self._loop_counter = 0
-        self._index = 0
-        self._show_frame(0)
         self.emit("playback-changed", False)
 
     def setup_pipeline(self) -> None:
