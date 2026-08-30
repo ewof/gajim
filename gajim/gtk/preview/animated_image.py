@@ -46,7 +46,6 @@ class AnimatedImage(Gtk.Box, SignalManager):
         self._picture = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN)
         self._picture.set_filename(str(thumbnail_path))
         self._picture.add_css_class("preview-image")
-        self._picture.set_can_target(False)
 
         self._static_paintable = self._picture.get_paintable()
         self._animated_paintable = None
@@ -58,14 +57,14 @@ class AnimatedImage(Gtk.Box, SignalManager):
         self._icon.set_can_target(False)
         self._icon.set_visible(False)
 
-        self._overlay = Gtk.Overlay()
+        self._overlay = Gtk.Overlay(hexpand=True, vexpand=True)
         self._overlay.set_child(self._picture)
         self._overlay.add_overlay(self._icon)
         self.append(self._overlay)
 
         self._controller = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
         self._connect(self._controller, "pressed", self._on_click)
-        self._overlay.add_controller(self._controller)
+        self.add_controller(self._controller)
 
         first = self._backend_classes.pop(0)
         self._backend = first(self._orig_path, max_loops=max_loops)
@@ -103,11 +102,8 @@ class AnimatedImage(Gtk.Box, SignalManager):
         self._backend.play()
 
     def _on_playback_changed(self, _backend: Any, is_playing: bool) -> None:
-        if is_playing:
-            assert self._animated_paintable is not None
+        if is_playing and self._animated_paintable is not None:
             self._picture.set_paintable(self._animated_paintable)
-        else:
-            self._picture.set_paintable(self._static_paintable)
 
         self._icon.set_visible(not is_playing)
 
@@ -144,6 +140,9 @@ class AnimatedImage(Gtk.Box, SignalManager):
             self._backend.setup_pipeline()
             return
 
+        self.toggle_playback()
+
+    def toggle_playback(self) -> None:
         if self._backend.is_playing():
             self._backend.pause()
         else:
