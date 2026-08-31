@@ -1010,6 +1010,7 @@ AUDIO_MIME_TYPES = {
 VIDEO_MIME_TYPES = {
     "video/H264",
     "video/H265",
+    "video/matroska",
     "video/mp4",
     "video/mpeg4-generic",
     "video/ogg",
@@ -1018,6 +1019,7 @@ VIDEO_MIME_TYPES = {
     "video/VP8",
     "video/webm",
     "video/x-matroska",
+    "video/x-matroska-3d",
     "video/x-msvideo",
 }
 

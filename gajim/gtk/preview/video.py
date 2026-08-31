@@ -22,6 +22,7 @@ from gajim.common.i18n import _
 from gajim.common.multiprocess.video_thumbnail import (
     extract_video_thumbnail_and_properties,
 )
+from gajim.common.multiprocess.video_thumbnail import transcode_for_preview
 from gajim.common.util.filesystem import load_file_async
 from gajim.common.util.text import format_duration
 
@@ -89,11 +90,14 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         SignalManager.__init__(self)
 
         self._orig_path = orig_path
+        self._playback_path = orig_path
         self._thumb_path = thumb_path
         self._filename = filename
         self._mime_type = mime_type
         self._loop_as_gif = loop_as_gif
         self._uri = uri
+        self._transcode_tried = False
+        self._transcoding = False
 
         self._layout = ImagePreviewLayout()
         self.set_layout_manager(self._layout)
@@ -202,7 +206,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
     ) -> None:
         if data is None:
             log.error("Loading thumbnail failed, %s: %s", self._thumb_path.name, error)
-            self.emit("display-error")
+            self._show_preview_without_thumbnail()
             return
 
         self._thumbnail = data
@@ -221,7 +225,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
             )
         except Exception as error:
             log.warning("Creating thumbnail failed for: %s %s", self._orig_path, error)
-            self.emit("display-error")
+            self._show_preview_without_thumbnail()
 
     def _create_thumbnail_finished(
         self, future: Future[tuple[bytes, dict[str, typing.Any]]]
@@ -232,7 +236,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
             log.exception(
                 "Creating thumbnail failed for: %s %s", self._orig_path, error
             )
-            self.emit("display-error")
+            self._show_preview_without_thumbnail()
         else:
             self._thumbnail = thumbnail_bytes
             self._display_thumbnail()
@@ -271,13 +275,22 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         disp_w, disp_h = self._image_preview_dimension(width, height)
         self._apply_preview_dimension(disp_w, disp_h)
 
+    def _show_preview_without_thumbnail(self) -> None:
+        preview_size = app.settings.get("preview_size")
+        self._apply_preview_dimension(preview_size, preview_size)
+        self._picture.set_tooltip_text(self._filename)
+        self._picture.add_css_class("preview-video-overlay")
+        self._play_image.set_pixel_size(max(preview_size // 3, 24))
+        self._play_image.set_visible(not self._loop_as_gif)
+        self._stack.set_visible_child_name("preview")
+
     def _display_thumbnail(self) -> None:
         assert self._thumbnail is not None
         try:
             texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(self._thumbnail))
         except GLib.Error:
             log.exception("Could not load video thumbnail %s", self._filename)
-            self.emit("display-error")
+            self._show_preview_without_thumbnail()
             return
 
         self._thumb_paintable = texture
@@ -361,6 +374,8 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
             self._mute_button.set_tooltip_text(_("Mute"))
 
     def toggle_playback(self) -> None:
+        if self._transcoding:
+            return
         if self._pipeline_failed:
             return
 
@@ -438,7 +453,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
             return False
 
         playbin.set_property("video-sink", sink)
-        playbin.set_property("uri", self._orig_path.as_uri())
+        playbin.set_property("uri", self._playback_path.as_uri())
         if self._loop_as_gif:
             playbin.set_property("mute", True)
         else:
@@ -457,8 +472,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._playbin = playbin
         self._bus = bus
         self._video_paintable = paintable
-        if self._loop_as_gif:
-            self._connect(paintable, "invalidate-size", self._on_video_size)
+        self._connect(paintable, "invalidate-size", self._on_video_size)
         return True
 
     def _play(self) -> None:
@@ -471,8 +485,7 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
             ):
                 self._video_paintable.set_texture(self._thumb_paintable)
             self._picture.set_paintable(self._video_paintable)
-            if self._loop_as_gif:
-                self._on_video_size(self._video_paintable)
+            self._on_video_size(self._video_paintable)
         self._playbin.set_state(Gst.State.PLAYING)
         self._is_playing = True
         self._start_progress()
@@ -530,16 +543,78 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._seeking = False
         return GLib.SOURCE_REMOVE
 
+    def _preview_mp4_path(self) -> Path:
+        return self._orig_path.with_name(f"{self._orig_path.stem}_preview.mp4")
+
+    def _is_missing_decoder_error(self, err: object, debug: str | None) -> bool:
+        text = f"{err} {debug or ''}".lower()
+        return (
+            ("missing" in text and "plugin" in text)
+            or "no decoder" in text
+            or "no suitable plugins" in text
+        )
+
+    def _try_transcode_fallback(self, err: object, debug: str | None) -> bool:
+        if self._loop_as_gif or self._transcode_tried or self._destroyed:
+            return False
+        if not self._is_missing_decoder_error(err, debug):
+            return False
+
+        output = self._preview_mp4_path()
+        self._transcode_tried = True
+        if output.exists() and output.stat().st_size > 0:
+            self._playback_path = output
+            self._play_transcoded()
+            return True
+
+        try:
+            future = app.process_pool.submit(
+                transcode_for_preview, self._orig_path, output
+            )
+        except Exception as error:
+            log.warning("Could not transcode video %s: %s", self._orig_path, error)
+            return False
+
+        self._transcoding = True
+        future.add_done_callback(
+            partial(GLib.idle_add, self._on_transcode_finished, output)
+        )
+        return True
+
+    def _on_transcode_finished(self, output: Path, future: Future[Path]) -> bool:
+        self._transcoding = False
+        if self._destroyed:
+            return GLib.SOURCE_REMOVE
+        try:
+            future.result()
+        except Exception as error:
+            log.warning("Transcoding failed for %s: %s", self._orig_path, error)
+            self._pipeline_failed = True
+            self._update_play_ui()
+            return GLib.SOURCE_REMOVE
+
+        self._playback_path = output
+        self._play_transcoded()
+        return GLib.SOURCE_REMOVE
+
+    def _play_transcoded(self) -> None:
+        self._pipeline_failed = False
+        if self._setup_pipeline():
+            self._play()
+
     def _on_bus_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
         if message.type == Gst.MessageType.EOS:
             self._on_eos()
         elif message.type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
             log.warning("Video playback error: %s %s", err, debug)
-            self._pipeline_failed = True
             self._cleanup_pipeline()
             if self._thumb_paintable is not None:
                 self._picture.set_paintable(self._thumb_paintable)
+            if self._try_transcode_fallback(err, debug):
+                self._update_play_ui()
+                return
+            self._pipeline_failed = True
             self._update_play_ui()
         elif message.type == Gst.MessageType.DURATION_CHANGED:
             if self._playbin is None:

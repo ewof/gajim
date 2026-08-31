@@ -35,7 +35,10 @@ from gajim.common.util.uri import get_geo_choords
 
 log = logging.getLogger("gajim.c.util.preview")
 
-MIME_TYPE_MAP = {"application/x-ext-webp": "image/webp"}
+MIME_TYPE_MAP = {
+    "application/x-ext-webp": "image/webp",
+    "video/matroska": "video/x-matroska",
+}
 
 
 def get_image_paths(
