@@ -5,6 +5,10 @@ from __future__ import annotations
 
 import typing
 
+import json
+import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 import gi
@@ -18,8 +22,133 @@ except Exception:
 
 Gst.init(None)
 
+log = logging.getLogger("gajim.c.multiprocess.video_thumbnail")
+
 
 def extract_video_thumbnail_and_properties(
+    input_: Path, output: Path | None, preview_size: int
+) -> tuple[bytes, dict[str, typing.Any]]:
+    try:
+        return _extract_with_gstreamer(input_, output, preview_size)
+    except Exception as error:
+        log.info("GStreamer thumbnail failed for %s: %s", input_, error)
+        return _extract_with_ffmpeg(input_, output, preview_size)
+
+
+def transcode_for_preview(input_: Path, output: Path) -> Path:
+    """Re-encode to yuv420p H.264 so GStreamer playbin can play the file."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise Exception("ffmpeg not found")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(  # noqa: S603
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(input_),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        check=True,
+        timeout=120,
+    )
+    if not output.exists() or output.stat().st_size <= 0:
+        raise Exception("ffmpeg produced an empty file")
+    return output
+
+
+def _extract_with_ffmpeg(
+    input_: Path, output: Path | None, preview_size: int
+) -> tuple[bytes, dict[str, typing.Any]]:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise Exception("ffmpeg not found")
+
+    dest = output
+    if dest is None:
+        dest = input_.with_name(f"{input_.stem}_ffmpeg_thumb.png")
+
+    subprocess.run(  # noqa: S603
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "0.5",
+            "-i",
+            str(input_),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={preview_size}:-2",
+            "-update",
+            "1",
+            str(dest),
+        ],
+        check=True,
+        timeout=20,
+    )
+    data = dest.read_bytes()
+    if not data:
+        raise Exception("ffmpeg produced an empty thumbnail")
+
+    metadata: dict[str, typing.Any] = {"width": 0, "height": 0, "duration": 0.0}
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is not None:
+        probe = subprocess.run(  # noqa: S603
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_entries",
+                "format=duration:stream=width,height",
+                str(input_),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+        info = json.loads(probe.stdout.decode())
+        try:
+            duration = info.get("format", {}).get("duration") or 0
+            metadata["duration"] = float(duration) * 1000
+        except (TypeError, ValueError):
+            pass
+        for stream in info.get("streams") or []:
+            if stream.get("width") and stream.get("height"):
+                metadata["width"] = int(stream["width"])
+                metadata["height"] = int(stream["height"])
+                break
+    return data, metadata
+
+
+def _extract_with_gstreamer(
     input_: Path, output: Path | None, preview_size: int
 ) -> tuple[bytes, dict[str, typing.Any]]:
     pipeline = Gst.Pipeline.new()

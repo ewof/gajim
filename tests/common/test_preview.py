@@ -13,6 +13,7 @@ from gajim.common.util.gif_hosts import klipy_media_url_from_json
 from gajim.common.util.gif_hosts import tenor_media_url_from_html
 from gajim.common.util.preview import get_preview_data
 from gajim.common.util.preview import get_size_and_mime_type
+from gajim.common.util.preview import is_video
 from gajim.common.util.preview import iter_direct_media_urls
 from gajim.common.util.preview import UrlPreview
 
@@ -52,6 +53,16 @@ class TestPreview(unittest.TestCase):
         assert isinstance(preview, UrlPreview)
         self.assertEqual(preview.uri, url)
         self.assertTrue(preview.mime_type.startswith("video/"))
+
+    def test_mkv_is_video(self) -> None:
+        self.assertTrue(is_video("video/x-matroska"))
+        self.assertTrue(is_video("video/matroska"))
+        app.settings.set("preview_allow_all_images", True)
+        url = "https://example.com/clip.mkv"
+        preview = get_preview_data(url, [])
+        assert isinstance(preview, UrlPreview)
+        self.assertTrue(is_video(preview.mime_type))
+        self.assertIn(url, iter_direct_media_urls(f"see {url}"))
 
     def test_gif_url_preview(self) -> None:
         url = "https://example.com/funny.gif"
