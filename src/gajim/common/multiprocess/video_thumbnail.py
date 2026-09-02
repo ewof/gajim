@@ -9,6 +9,7 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import gi
@@ -25,6 +26,29 @@ Gst.init(None)
 log = logging.getLogger("gajim.c.multiprocess.video_thumbnail")
 
 
+def _subprocess_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if sys.platform == "win32":
+        # Avoid a console flash when the NSIS-installed Gajim runs ffmpeg.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
+
+
+def _find_tool(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    exe_name = f"{name}.exe" if sys.platform == "win32" else name
+    candidates = [
+        Path(sys.executable).resolve().parent / exe_name,
+        Path(sys.argv[0]).resolve().parent / exe_name,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def extract_video_thumbnail_and_properties(
     input_: Path, output: Path | None, preview_size: int
 ) -> tuple[bytes, dict[str, typing.Any]]:
@@ -37,7 +61,7 @@ def extract_video_thumbnail_and_properties(
 
 def transcode_for_preview(input_: Path, output: Path) -> Path:
     """Re-encode to yuv420p H.264 so GStreamer playbin can play the file."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _find_tool("ffmpeg")
     if ffmpeg is None:
         raise Exception("ffmpeg not found")
 
@@ -73,6 +97,7 @@ def transcode_for_preview(input_: Path, output: Path) -> Path:
         ],
         check=True,
         timeout=120,
+        **_subprocess_kwargs(),
     )
     if not output.exists() or output.stat().st_size <= 0:
         raise Exception("ffmpeg produced an empty file")
@@ -82,7 +107,7 @@ def transcode_for_preview(input_: Path, output: Path) -> Path:
 def _extract_with_ffmpeg(
     input_: Path, output: Path | None, preview_size: int
 ) -> tuple[bytes, dict[str, typing.Any]]:
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _find_tool("ffmpeg")
     if ffmpeg is None:
         raise Exception("ffmpeg not found")
 
@@ -111,13 +136,14 @@ def _extract_with_ffmpeg(
         ],
         check=True,
         timeout=20,
+        **_subprocess_kwargs(),
     )
     data = dest.read_bytes()
     if not data:
         raise Exception("ffmpeg produced an empty thumbnail")
 
     metadata: dict[str, typing.Any] = {"width": 0, "height": 0, "duration": 0.0}
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = _find_tool("ffprobe")
     if ffprobe is not None:
         probe = subprocess.run(  # noqa: S603
             [
@@ -133,6 +159,7 @@ def _extract_with_ffmpeg(
             check=True,
             capture_output=True,
             timeout=15,
+            **_subprocess_kwargs(),
         )
         info = json.loads(probe.stdout.decode())
         try:
