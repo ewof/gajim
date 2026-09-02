@@ -140,6 +140,13 @@ def _set_env_vars() -> None:
     # https://github.com/msys2/MINGW-packages/issues/24812
     os.environ["GTK_A11Y"] = "none"
 
+    # The NSIS tree keeps ffmpeg.exe next to Gajim.exe. Subprocesses (thumbnails,
+    # MKV transcode) and the process pool need that directory on PATH.
+    bin_dir = os.path.dirname(os.path.abspath(sys.executable))
+    path = os.environ.get("PATH", "")
+    if bin_dir and bin_dir not in path.split(os.pathsep):
+        os.environ["PATH"] = bin_dir + os.pathsep + path
+
 
 def _init_gtk() -> None:
     from gi.repository import Gtk

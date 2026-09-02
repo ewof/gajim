@@ -20,8 +20,21 @@ PYTHON_ID="python${MAJOR_PY_VERSION}"
 QL_VERSION="0.0.0"
 QL_VERSION_DESC="UNKNOWN"
 
+
+function require_ucrt64 {
+    # python-pysequoia (and current Gajim CI) only exist for UCRT64, not MINGW64.
+    if [[ "${MSYSTEM}" != "UCRT64" ]]; then
+        echo "Gajim's Windows build must run in MSYS2 UCRT64." >&2
+        echo "Start Menu:  MSYS2 UCRT64" >&2
+        echo "Or run:      C:\\\\msys64\\\\msys2_shell.cmd -ucrt64" >&2
+        echo "Current MSYSTEM=${MSYSTEM:-unset}" >&2
+        exit 1
+    fi
+}
+
 MINGW_DEPS="\
 ${MINGW_PACKAGE_PREFIX}-adwaita-icon-theme \
+${MINGW_PACKAGE_PREFIX}-ffmpeg \
 ${MINGW_PACKAGE_PREFIX}-gst-plugins-base \
 ${MINGW_PACKAGE_PREFIX}-gst-plugins-good \
 ${MINGW_PACKAGE_PREFIX}-gst-plugins-bad \
@@ -118,7 +131,7 @@ function create_root {
     mkdir -p "${BUILD_ROOT}"/var/lib/pacman
     mkdir -p "${BUILD_ROOT}"/var/log
 
-    build_pacman -Syu
+    build_pacman --noconfirm -Syu
     build_pacman --noconfirm -S base
 }
 
@@ -133,6 +146,17 @@ function install_python_deps {
     build_pip_install $(echo "$PYTHON_REQUIREMENTS" | tr ["\\n"] [" "])
 }
 
+function _update_icon_cache {
+    local theme_dir="$1"
+    if [[ -x "${MINGW_ROOT}/bin/gtk4-update-icon-cache.exe" ]]; then
+        "${MINGW_ROOT}"/bin/gtk4-update-icon-cache.exe --force "${theme_dir}" || true
+    elif [[ -x "${MINGW_ROOT}/bin/gtk-update-icon-cache.exe" ]]; then
+        "${MINGW_ROOT}"/bin/gtk-update-icon-cache.exe --force "${theme_dir}" || true
+    else
+        echo "Skipping icon cache update (gtk-update-icon-cache not in build root)"
+    fi
+}
+
 function post_install_deps {
     # remove the large png icons, they should be used rarely and svg works fine
     rm -Rf "${MINGW_ROOT}/share/icons/Adwaita/512x512"
@@ -140,11 +164,14 @@ function post_install_deps {
     rm -Rf "${MINGW_ROOT}/share/icons/Adwaita/96x96"
     rm -Rf "${MINGW_ROOT}/share/icons/Adwaita/64x64"
     rm -Rf "${MINGW_ROOT}/share/icons/Adwaita/48x48"
-    "${MINGW_ROOT}"/bin/gtk4-update-icon-cache.exe --force \
-        "${MINGW_ROOT}/share/icons/Adwaita"
+    _update_icon_cache "${MINGW_ROOT}/share/icons/Adwaita"
 
-    # Compile GLib schemas
-    "${MINGW_ROOT}"/bin/glib-compile-schemas.exe "${MINGW_ROOT}"/share/glib-2.0/schemas
+    if [[ -x "${MINGW_ROOT}/bin/glib-compile-schemas.exe" ]]; then
+        "${MINGW_ROOT}"/bin/glib-compile-schemas.exe \
+            "${MINGW_ROOT}"/share/glib-2.0/schemas || true
+    else
+        echo "Skipping glib-compile-schemas (not in build root)"
+    fi
 }
 
 function install_gajim {
@@ -179,9 +206,7 @@ function install_gajim {
     rm -Rf "${MINGW_ROOT}/share/icons/hicolor"
     cp -r gajim/data/icons/hicolor "${MINGW_ROOT}"/share/icons
 
-    # Update icon cache
-    "${MINGW_ROOT}"/bin/gtk4-update-icon-cache.exe --force \
-        "${MINGW_ROOT}/share/icons/hicolor"
+    _update_icon_cache "${MINGW_ROOT}/share/icons/hicolor"
 }
 
 function cleanup_install {
@@ -264,7 +289,7 @@ function cleanup_install {
 
     # Remove EXE files
     echo "Removing .exe files"
-    RETAINED_EXES="gajim|gajim-debug|python3|gdbus|gspawn-win64-helper"
+    RETAINED_EXES="gajim|gajim-debug|python3|gdbus|gspawn-win64-helper|ffmpeg|ffprobe"
     find "${MINGW_ROOT}" -regextype "posix-extended" -name "*.exe" -and ! \
         -iregex ".*/(${RETAINED_EXES})\.exe" -exec rm -f {} \; -print
 
@@ -335,7 +360,13 @@ function cleanup_install {
 }
 
 function makeappx {
-    "$(find /c/Program\ Files\ \(x86\)/Windows\ Kits/10/bin/*/x64/ -name makeappx.exe -print | sort | tail -n 1)" "$@"
+    local makeappx_bin
+    makeappx_bin="$(find /c/Program\ Files\ \(x86\)/Windows\ Kits/10/bin/*/x64/ -name makeappx.exe -print 2>/dev/null | sort | tail -n 1)"
+    if [[ -z "${makeappx_bin}" ]]; then
+        echo "makeappx.exe not found (Windows SDK). Skipping MSIX."
+        return 1
+    fi
+    "${makeappx_bin}" "$@"
 }
 
 function makepri {
@@ -348,6 +379,11 @@ function build_exe_installer {
 }
 
 function build_msix_installer {
+    if ! find /c/Program\ Files\ \(x86\)/Windows\ Kits/10/bin/*/x64/ \
+            -name makeappx.exe -print -quit 2>/dev/null | grep -q .; then
+        echo "Windows SDK makeappx.exe not found; skipping MSIX"
+        return 1
+    fi
     (
         cd ${BUILD_ROOT}
 

@@ -6,6 +6,7 @@ DIR="$( cd "$( dirname "$0" )" && pwd )"
 source "$DIR"/_base.sh
 
 function main {
+    require_ucrt64
     pacman --noconfirm -S --needed \
         git \
         intltool \
