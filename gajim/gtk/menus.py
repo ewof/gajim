@@ -849,12 +849,16 @@ def get_preview_menu(
     encrypted: bool = False,
     orig_path: Path | None = None,
     from_link: bool = False,
+    copy_image: bool = False,
 ) -> GajimMenu:
     menu_items: MenuItemListT = []
-    if orig_path is not None:
+    if orig_path is not None and copy_image:
         menu_items.append((_("Copy _Image"), "app.copy-image", str(orig_path)))
-    if uri and (from_link or orig_path is None):
+    if uri:
         menu_items.append((_("_Copy Link"), "app.copy-text", uri))
+    if orig_path is not None:
+        menu_items.append((_("Open _Folder"), "app.open-folder", str(orig_path)))
+        menu_items.append((_("_Save as…"), "app.save-file-as", str(orig_path)))
 
     if uri and not encrypted:
         menu_items.append((_("Open Link in _Browser"), "app.open-link", uri))

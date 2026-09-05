@@ -5,6 +5,12 @@ https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/css-variables.html
 */
 
 /* GTK specific changes =================================================== */
+/* Square the main window; media and other widgets keep their own radii. */
+window.gajim-main-window {
+    --window-radius: 0px;
+    border-radius: 0;
+}
+
 /* Remove backdrop anomation */
 row:backdrop { transition: none; }
 

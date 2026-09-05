@@ -216,13 +216,14 @@ class ImageLightbox(Gtk.Overlay, SignalManager):
         y: float,
     ) -> None:
         gesture_click.set_state(Gtk.EventSequenceState.CLAIMED)
-        orig_path = None if is_video(self._mime_type) else self._path
+        orig_path = self._path
         if orig_path is None and not self._uri:
             return
         menu = get_preview_menu(
             self._uri or "",
             orig_path=orig_path,
             from_link=self._from_link and bool(self._uri),
+            copy_image=not is_video(self._mime_type),
         )
         if menu.get_n_items() == 0:
             return

@@ -371,17 +371,19 @@ class PreviewWidget(Gtk.Box, SignalManager):
         gesture_click.set_state(Gtk.EventSequenceState.CLAIMED)
         encrypted = self._uri.startswith("aesgcm://")
         orig_path = None
+        copy_image = False
         if (
             self._state in (PreviewState.DOWNLOADED, PreviewState.DISPLAY)
             and self._orig_path.exists()
-            and is_image(self._mime_type)
         ):
             orig_path = self._orig_path
+            copy_image = is_image(self._mime_type)
         menu = get_preview_menu(
             self._uri,
             encrypted=encrypted,
             orig_path=orig_path,
             from_link=self._from_link,
+            copy_image=copy_image,
         )
         self._menu_popover.set_menu_model(menu)
         self._menu_popover.set_pointing_to_coord(x, y)

@@ -212,6 +212,7 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
 
         self._layout = ImagePreviewLayout()
         self.set_layout_manager(self._layout)
+        self._preview_height = 0
 
         if mime_type not in IMAGE_MIME_TYPES:
             raise ValueError("Not supported mime type: %s" % mime_type)
@@ -318,6 +319,7 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         return width, height
 
     def _set_preview_dimension(self, width: int, height: int) -> None:
+        self._preview_height = height
         self._content_clamp.set_maximum_size(width)
         self._content_clamp.set_tightening_threshold(width)
         self._layout.set_preview_dimension(width, height)
@@ -376,7 +378,9 @@ class ImagePreviewWidget(Gtk.Box, SignalManager):
         _x: int,
         _y: int,
     ) -> None:
-        self._file_control_buttons.set_visible(True)
+        # The overlay bar is taller than very short images and would cover them.
+        if self._preview_height >= 80:
+            self._file_control_buttons.set_visible(True)
 
     def _on_content_cursor_leave(
         self,

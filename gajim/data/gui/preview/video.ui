@@ -36,6 +36,7 @@
                         <child type="overlay">
                           <object class="FileControlButtons" id="_file_control_buttons">
                             <property name="visible">false</property>
+                            <property name="valign">start</property>
                             <style>
                               <class name="preview-image-overlay"/>
                             </style>

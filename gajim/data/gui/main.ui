@@ -40,6 +40,9 @@
      get. Otherwise the content can overflow and Adwaita warns about it
      ("exceeds MainWindow height"). The height is dictated by AppSideBar,
      whose rows don't scroll. -->
+    <style>
+      <class name="gajim-main-window"/>
+    </style>
     <property name="width-request">360</property>
     <property name="height-request">360</property>
     <property name="content">
