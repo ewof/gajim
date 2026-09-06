@@ -14,7 +14,6 @@ from gajim.common import app
 from gajim.common.const import IMAGE_MIME_TYPES
 from gajim.common.i18n import _
 from gajim.common.util.image import get_texture_from_file
-from gajim.common.util.image import image_size
 from gajim.common.util.image import is_image_animated
 from gajim.common.util.preview import is_video
 from gajim.common.util.text import format_duration
@@ -77,17 +76,6 @@ def _close_overlay() -> None:
         _open_overlay.close()
 
 
-def _fit_size(
-    nat_w: int, nat_h: int, max_w: int, max_h: int
-) -> tuple[int, int]:
-    if nat_w <= 0 or nat_h <= 0:
-        return max(max_w, 1), max(max_h, 1)
-    if nat_w <= max_w and nat_h <= max_h:
-        return nat_w, nat_h
-    scale = min(max_w / nat_w, max_h / nat_h)
-    return max(int(nat_w * scale), 1), max(int(nat_h * scale), 1)
-
-
 class ImageLightbox(Gtk.Overlay, SignalManager):
     def __init__(
         self,
@@ -99,12 +87,12 @@ class ImageLightbox(Gtk.Overlay, SignalManager):
         global _open_overlay
         Gtk.Overlay.__init__(self, hexpand=True, vexpand=True, can_focus=True)
         SignalManager.__init__(self)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
 
         self._path = path
         self._mime_type = mime_type
         self._uri = uri
         self._from_link = from_link
-        self._nat_w, self._nat_h = 0, 0
 
         backdrop = Gtk.Box(hexpand=True, vexpand=True)
         click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
@@ -112,35 +100,44 @@ class ImageLightbox(Gtk.Overlay, SignalManager):
         backdrop.add_controller(click)
         self.set_child(backdrop)
 
-        self._media_bin = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        # Fill the overlay so Gtk.Picture's huge natural size cannot pin the
+        # child to the top-left. content-fit=contain then centers the image.
+        self._media_bin = Gtk.Box(
+            hexpand=True,
+            vexpand=True,
+            halign=Gtk.Align.FILL,
+            valign=Gtk.Align.FILL,
+        )
+        media_click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+        self._connect(media_click, "pressed", self._on_background_clicked)
+        self._media_bin.add_controller(media_click)
+
         media: Gtk.Widget
         if is_video(mime_type):
             media = _LoopingVideoPicture(path)
         elif mime_type in IMAGE_MIME_TYPES and is_image_animated(path):
-            self._nat_w, self._nat_h = image_size(path)
             media = AnimatedImage(
                 path, path, [AnimatedImageTextureBackend], enlarge_on_click=False
             )
         else:
             texture = get_texture_from_file(path)
-            picture = Gtk.Picture(
-                content_fit=Gtk.ContentFit.CONTAIN,
-                can_target=True,
-            )
+            picture = Gtk.Picture(content_fit=Gtk.ContentFit.SCALE_DOWN)
             if texture is not None:
-                self._nat_w = texture.get_width()
-                self._nat_h = texture.get_height()
                 picture.set_paintable(texture)
             else:
-                self._nat_w, self._nat_h = image_size(path)
                 # filename is a method, not a GObject construct property
                 picture.set_filename(str(path))
             media = picture
         self._media = media
-        if isinstance(media, Gtk.Picture):
-            paintable = media.get_paintable()
-            if paintable is not None:
-                self._connect(paintable, "invalidate-size", self._on_paintable_size)
+        media.set_hexpand(True)
+        media.set_vexpand(True)
+        media.set_halign(Gtk.Align.FILL)
+        media.set_valign(Gtk.Align.FILL)
+        media.set_can_target(False)
+        media.set_margin_start(40)
+        media.set_margin_end(40)
+        media.set_margin_top(40)
+        media.set_margin_bottom(40)
         self._media_bin.append(media)
         self.add_overlay(self._media_bin)
 
@@ -166,13 +163,13 @@ class ImageLightbox(Gtk.Overlay, SignalManager):
         self._connect(key, "key-pressed", self._on_key_pressed)
         self.add_controller(key)
 
-        self._connect(self, "notify::width", self._on_allocate)
-        self._connect(self, "notify::height", self._on_allocate)
-
         _open_overlay = self
 
     def close(self) -> None:
         global _open_overlay
+        if _open_overlay is not self:
+            return
+        _open_overlay = None
         if isinstance(self._media, _LoopingVideoPicture):
             self._media.cleanup()
         self._menu_popover.unparent()
@@ -180,32 +177,11 @@ class ImageLightbox(Gtk.Overlay, SignalManager):
         host.set_visible(False)
         container_remove_all(host)
         self._disconnect_all()
-        if _open_overlay is self:
-            _open_overlay = None
 
-    def _on_paintable_size(self, *_args: object) -> None:
-        self._update_nat_from_paintable()
-        self._on_allocate()
-
-    def _update_nat_from_paintable(self) -> None:
-        if not isinstance(self._media, Gtk.Picture):
-            return
-        paintable = self._media.get_paintable()
-        if paintable is None:
-            return
-        width = paintable.get_intrinsic_width()
-        height = paintable.get_intrinsic_height()
-        if width > 0 and height > 0:
-            self._nat_w, self._nat_h = width, height
-
-    def _on_allocate(self, *_args: object) -> None:
-        self._update_nat_from_paintable()
-        max_w = max(self.get_width() - 80, 1)
-        max_h = max(self.get_height() - 80, 1)
-        width, height = _fit_size(self._nat_w, self._nat_h, max_w, max_h)
-        self._media.set_size_request(width, height)
-
-    def _on_background_clicked(self, *_args: object) -> None:
+    def _on_background_clicked(
+        self, gesture_click: Gtk.GestureClick, *_args: object
+    ) -> None:
+        gesture_click.set_state(Gtk.EventSequenceState.CLAIMED)
         self.close()
 
     def _on_context_clicked(
