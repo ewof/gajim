@@ -247,6 +247,10 @@ class ChatControl(EventHelper):
             self._reset_message_selection()
             return True
 
+        if self._jump_to_end_button.get_visible():
+            self.reset_view()
+            return True
+
         return False
 
     def switch_contact(
