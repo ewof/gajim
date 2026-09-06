@@ -44,6 +44,11 @@ log = logging.getLogger("gajim.gtk.preview.video")
 
 _playing_widget: VideoPreviewWidget | None = None
 
+# Collapse extra controls when the preview is too narrow to fit them.
+_CONTROLS_VOLUME_MIN_WIDTH = 280
+_CONTROLS_TIME_MIN_WIDTH = 220
+_CONTROLS_MUTE_MIN_WIDTH = 140
+
 
 @Gtk.Template.from_string(string=get_ui_string("preview/video.ui"))
 class VideoPreviewWidget(Gtk.Box, SignalManager):
@@ -141,8 +146,10 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._connect(self._mute_button, "clicked", self._on_mute_clicked)
         self._connect(self._volume_bar, "value-changed", self._on_volume_changed)
         self._connect(self._fullscreen_button, "clicked", self._on_fullscreen_clicked)
+        self._connect(self._content_overlay, "notify::width", self._on_overlay_width)
         self._mute_button.set_cursor(pointer_cursor)
         self._fullscreen_button.set_cursor(pointer_cursor)
+        self._controls_box.set_overflow(Gtk.Overflow.HIDDEN)
 
         if loop_as_gif:
             self._play_image.set_visible(False)
@@ -264,6 +271,17 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._content_clamp.set_maximum_size(width)
         self._content_clamp.set_tightening_threshold(width)
         self._layout.set_preview_dimension(width, height)
+        self._update_controls_compact(width)
+
+    def _on_overlay_width(self, overlay: Gtk.Overlay, *_args: object) -> None:
+        self._update_controls_compact(overlay.get_width())
+
+    def _update_controls_compact(self, width: int) -> None:
+        if self._loop_as_gif or width <= 1:
+            return
+        self._volume_bar.set_visible(width >= _CONTROLS_VOLUME_MIN_WIDTH)
+        self._progress_label.set_visible(width >= _CONTROLS_TIME_MIN_WIDTH)
+        self._mute_button.set_visible(width >= _CONTROLS_MUTE_MIN_WIDTH)
 
     def _on_video_size(self, paintable: Gdk.Paintable, *_args: object) -> None:
         if self._destroyed:
