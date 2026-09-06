@@ -793,6 +793,10 @@ entry.field-missing {
 window.media-lightbox {
     background-color: alpha(#000000, 0.82);
 }
+.media-lightbox .preview-image {
+    border-radius: 0;
+    box-shadow: none;
+}
 .media-lightbox-close,
 .media-lightbox-fullscreen {
     margin: 12px;
