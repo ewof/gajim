@@ -53,23 +53,10 @@
                         <child type="overlay">
                           <object class="GtkBox" id="_controls_box">
                             <property name="valign">end</property>
+                            <property name="hexpand">true</property>
                             <property name="visible">false</property>
-                            <property name="spacing">6</property>
-                            <child>
-                              <object class="GtkButton" id="_play_pause_button">
-                                <property name="valign">center</property>
-                                <property name="tooltip-text" translatable="yes">Play</property>
-                                <child>
-                                  <object class="GtkImage" id="_play_icon">
-                                    <property name="icon-name">lucide-play-symbolic</property>
-                                  </object>
-                                </child>
-                                <style>
-                                  <class name="circular"/>
-                                  <class name="flat"/>
-                                </style>
-                              </object>
-                            </child>
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">0</property>
                             <child>
                               <object class="GtkAdjustment" id="_seek_adj">
                                 <property name="lower">0</property>
@@ -86,63 +73,94 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkLabel" id="_progress_label">
-                                <property name="label">0:00/0:00</property>
-                                <property name="valign">center</property>
-                                <style>
-                                  <class name="numeric"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="_mute_button">
-                                <property name="valign">center</property>
-                                <property name="tooltip-text" translatable="yes">Mute</property>
-                                <child>
-                                  <object class="GtkImage" id="_volume_icon">
-                                    <property name="icon-name">audio-volume-high-symbolic</property>
+                              <object class="GtkCenterBox">
+                                <property name="hexpand">true</property>
+                                <child type="start">
+                                  <object class="GtkBox">
+                                    <property name="spacing">2</property>
+                                    <child>
+                                      <object class="GtkButton" id="_play_pause_button">
+                                        <property name="valign">center</property>
+                                        <property name="tooltip-text" translatable="yes">Play</property>
+                                        <child>
+                                          <object class="GtkImage" id="_play_icon">
+                                            <property name="icon-name">lucide-play-symbolic</property>
+                                          </object>
+                                        </child>
+                                        <style>
+                                          <class name="circular"/>
+                                          <class name="flat"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel" id="_progress_label">
+                                        <property name="label">0:00/0:00</property>
+                                        <property name="valign">center</property>
+                                        <property name="single-line-mode">1</property>
+                                        <style>
+                                          <class name="numeric"/>
+                                        </style>
+                                      </object>
+                                    </child>
                                   </object>
                                 </child>
-                                <style>
-                                  <class name="circular"/>
-                                  <class name="flat"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkAdjustment" id="_volume_adj">
-                                <property name="lower">0</property>
-                                <property name="upper">1</property>
-                                <property name="value">1</property>
-                                <property name="step-increment">0.05</property>
-                                <property name="page-increment">0.1</property>
-                              </object>
-                              <object class="GtkScale" id="_volume_bar">
-                                <property name="valign">center</property>
-                                <property name="width-request">80</property>
-                                <property name="hexpand">false</property>
-                                <property name="draw-value">false</property>
-                                <property name="restrict-to-fill-level">0</property>
-                                <property name="adjustment">_volume_adj</property>
-                                <property name="tooltip-text" translatable="yes">Volume</property>
-                                <style>
-                                  <class name="preview-video-volume"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="_fullscreen_button">
-                                <property name="valign">center</property>
-                                <property name="tooltip-text" translatable="yes">Fullscreen</property>
-                                <child>
-                                  <object class="GtkImage">
-                                    <property name="icon-name">lucide-maximize-symbolic</property>
+                                <child type="end">
+                                  <object class="GtkBox">
+                                    <property name="spacing">2</property>
+                                    <child>
+                                      <object class="GtkButton" id="_mute_button">
+                                        <property name="valign">center</property>
+                                        <property name="tooltip-text" translatable="yes">Mute</property>
+                                        <child>
+                                          <object class="GtkImage" id="_volume_icon">
+                                            <property name="icon-name">audio-volume-high-symbolic</property>
+                                          </object>
+                                        </child>
+                                        <style>
+                                          <class name="circular"/>
+                                          <class name="flat"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkAdjustment" id="_volume_adj">
+                                        <property name="lower">0</property>
+                                        <property name="upper">1</property>
+                                        <property name="value">1</property>
+                                        <property name="step-increment">0.05</property>
+                                        <property name="page-increment">0.1</property>
+                                      </object>
+                                      <object class="GtkScale" id="_volume_bar">
+                                        <property name="valign">center</property>
+                                        <property name="width-request">64</property>
+                                        <property name="hexpand">false</property>
+                                        <property name="draw-value">false</property>
+                                        <property name="restrict-to-fill-level">0</property>
+                                        <property name="adjustment">_volume_adj</property>
+                                        <property name="tooltip-text" translatable="yes">Volume</property>
+                                        <style>
+                                          <class name="preview-video-volume"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkButton" id="_fullscreen_button">
+                                        <property name="valign">center</property>
+                                        <property name="tooltip-text" translatable="yes">Fullscreen</property>
+                                        <child>
+                                          <object class="GtkImage">
+                                            <property name="icon-name">lucide-maximize-symbolic</property>
+                                          </object>
+                                        </child>
+                                        <style>
+                                          <class name="circular"/>
+                                          <class name="flat"/>
+                                        </style>
+                                      </object>
+                                    </child>
                                   </object>
                                 </child>
-                                <style>
-                                  <class name="circular"/>
-                                  <class name="flat"/>
-                                </style>
                               </object>
                             </child>
                             <style>
