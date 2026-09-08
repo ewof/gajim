@@ -7,6 +7,7 @@ from __future__ import annotations
 import typing
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import Future
 from functools import partial
 from pathlib import Path
@@ -45,9 +46,154 @@ log = logging.getLogger("gajim.gtk.preview.video")
 _playing_widget: VideoPreviewWidget | None = None
 
 # Collapse extra controls when the preview is too narrow to fit them.
-_CONTROLS_VOLUME_MIN_WIDTH = 280
 _CONTROLS_TIME_MIN_WIDTH = 220
 _CONTROLS_MUTE_MIN_WIDTH = 140
+_VOLUME_POPOVER_HIDE_MS = 200
+_VOLUME_SLIDER_HEIGHT = 100
+
+
+class VolumeHoverPopover(SignalManager):
+    """Vertical volume slider shown while the mute icon is hovered."""
+
+    def __init__(
+        self,
+        mute_button: Gtk.Button,
+        on_changed: Callable[[float], None],
+        on_closed: Callable[[], None] | None = None,
+    ) -> None:
+        SignalManager.__init__(self)
+        self._on_changed = on_changed
+        self._on_closed = on_closed
+        self._hide_id: int | None = None
+        self._mute_contains = False
+        self._popover_contains = False
+        self._open = False
+        self._dragging = False
+        self._updating = False
+
+        self.adjustment = Gtk.Adjustment(
+            lower=0, upper=1, value=1, step_increment=0.05, page_increment=0.1
+        )
+        self.scale = Gtk.Scale(
+            orientation=Gtk.Orientation.VERTICAL,
+            adjustment=self.adjustment,
+            inverted=True,
+            draw_value=False,
+            height_request=_VOLUME_SLIDER_HEIGHT,
+            tooltip_text=_("Volume"),
+        )
+        self.scale.add_css_class("preview-video-volume")
+        self._connect(self.scale, "value-changed", self._on_value_changed)
+        self._connect(self.scale, "change-value", self._on_change_value)
+
+        drag_click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+        self._connect(drag_click, "released", self._on_drag_released)
+        self.scale.add_controller(drag_click)
+
+        self.popover = Gtk.Popover(
+            position=Gtk.PositionType.TOP,
+            autohide=False,
+            has_arrow=True,
+        )
+        self.popover.add_css_class("preview-video-volume-popover")
+        self.popover.set_child(self.scale)
+        self.popover.set_parent(mute_button)
+
+        mute_motion = Gtk.EventControllerMotion()
+        self._connect(
+            mute_motion, "notify::contains-pointer", self._on_mute_contains_pointer
+        )
+        mute_button.add_controller(mute_motion)
+
+        popover_motion = Gtk.EventControllerMotion()
+        self._connect(
+            popover_motion,
+            "notify::contains-pointer",
+            self._on_popover_contains_pointer,
+        )
+        self.popover.add_controller(popover_motion)
+
+    def set_displayed_volume(self, value: float) -> None:
+        self._updating = True
+        self.adjustment.set_value(value)
+        self._updating = False
+
+    def is_visible(self) -> bool:
+        return self._open
+
+    def popdown(self) -> None:
+        self._cancel_hide()
+        self._mute_contains = False
+        self._popover_contains = False
+        self._dragging = False
+        self._open = False
+        self.popover.popdown()
+
+    def cleanup(self) -> None:
+        self.popdown()
+        self.popover.unparent()
+        self._disconnect_all()
+
+    def _on_value_changed(self, _scale: Gtk.Scale) -> None:
+        if self._updating:
+            return
+        self._on_changed(self.adjustment.get_value())
+
+    def _on_change_value(
+        self, _scale: Gtk.Scale, _scroll: Gtk.ScrollType, _value: float
+    ) -> bool:
+        self._dragging = True
+        self._cancel_hide()
+        return False
+
+    def _on_drag_released(self, *_args: object) -> None:
+        self._dragging = False
+        self._sync_hover()
+
+    def _on_mute_contains_pointer(
+        self, controller: Gtk.EventControllerMotion, *_args: object
+    ) -> None:
+        self._mute_contains = bool(controller.get_property("contains-pointer"))
+        self._sync_hover()
+
+    def _on_popover_contains_pointer(
+        self, controller: Gtk.EventControllerMotion, *_args: object
+    ) -> None:
+        self._popover_contains = bool(controller.get_property("contains-pointer"))
+        self._sync_hover()
+
+    def _sync_hover(self) -> None:
+        if self._mute_contains or self._popover_contains:
+            self._cancel_hide()
+            self._open = True
+            self.popover.popup()
+            return
+        if not self._dragging:
+            self._schedule_hide()
+
+    def _schedule_hide(self) -> None:
+        self._cancel_hide()
+        self._hide_id = GLib.timeout_add(_VOLUME_POPOVER_HIDE_MS, self._on_hide_timeout)
+
+    def _cancel_hide(self) -> None:
+        if self._hide_id is not None:
+            GLib.source_remove(self._hide_id)
+            self._hide_id = None
+
+    def _on_hide_timeout(self) -> bool:
+        self._hide_id = None
+        if (
+            self._mute_contains
+            or self._popover_contains
+            or self._dragging
+        ):
+            return GLib.SOURCE_REMOVE
+        was_open = self._open
+        self._open = False
+        self.popover.popdown()
+        if was_open and self._on_closed is not None:
+            self._on_closed()
+        return GLib.SOURCE_REMOVE
 
 
 @Gtk.Template.from_string(string=get_ui_string("preview/video.ui"))
@@ -77,8 +223,6 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
     _progress_label: Gtk.Label = Gtk.Template.Child()
     _mute_button: Gtk.Button = Gtk.Template.Child()
     _volume_icon: Gtk.Image = Gtk.Template.Child()
-    _volume_bar: Gtk.Scale = Gtk.Template.Child()
-    _volume_adj: Gtk.Adjustment = Gtk.Template.Child()
     _fullscreen_button: Gtk.Button = Gtk.Template.Child()
 
     def __init__(
@@ -119,14 +263,18 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._volume = 1.0
         self._muted = False
         self._volume_before_mute = 1.0
-        self._updating_volume_ui = False
+        self._pointer_inside = False
         self._progress_id: int | None = None
         self._pipeline_failed = False
         self._destroyed = False
+        self._volume_hover: VolumeHoverPopover | None = None
 
         content_hover_controller = Gtk.EventControllerMotion()
-        self._connect(content_hover_controller, "enter", self._on_content_cursor_enter)
-        self._connect(content_hover_controller, "leave", self._on_content_cursor_leave)
+        self._connect(
+            content_hover_controller,
+            "notify::contains-pointer",
+            self._on_content_contains_pointer,
+        )
         self.add_controller(content_hover_controller)
 
         self._file_control_buttons.set_file_size(file_size)
@@ -144,12 +292,16 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._connect(self._play_pause_button, "clicked", self._on_play_pause_clicked)
         self._connect(self._seek_bar, "change-value", self._on_seek)
         self._connect(self._mute_button, "clicked", self._on_mute_clicked)
-        self._connect(self._volume_bar, "value-changed", self._on_volume_changed)
         self._connect(self._fullscreen_button, "clicked", self._on_fullscreen_clicked)
         self._connect(self._content_overlay, "notify::width", self._on_overlay_width)
         self._mute_button.set_cursor(pointer_cursor)
         self._fullscreen_button.set_cursor(pointer_cursor)
         self._controls_box.set_overflow(Gtk.Overflow.HIDDEN)
+        self._volume_hover = VolumeHoverPopover(
+            self._mute_button,
+            self.set_volume,
+            on_closed=self._on_volume_popover_closed,
+        )
 
         if loop_as_gif:
             self._play_image.set_visible(False)
@@ -178,6 +330,9 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         self._stop_progress()
         self._release_playback()
         self._cleanup_pipeline()
+        if self._volume_hover is not None:
+            self._volume_hover.cleanup()
+            self._volume_hover = None
         self._disconnect_all()
         app.check_finalize(self)
 
@@ -279,9 +434,11 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
     def _update_controls_compact(self, width: int) -> None:
         if self._loop_as_gif or width <= 1:
             return
-        self._volume_bar.set_visible(width >= _CONTROLS_VOLUME_MIN_WIDTH)
         self._progress_label.set_visible(width >= _CONTROLS_TIME_MIN_WIDTH)
-        self._mute_button.set_visible(width >= _CONTROLS_MUTE_MIN_WIDTH)
+        show_mute = width >= _CONTROLS_MUTE_MIN_WIDTH
+        self._mute_button.set_visible(show_mute)
+        if not show_mute and self._volume_hover is not None:
+            self._volume_hover.popdown()
 
     def _on_video_size(self, paintable: Gdk.Paintable, *_args: object) -> None:
         if self._destroyed:
@@ -362,11 +519,6 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
     def _on_mute_clicked(self, _button: Gtk.Button) -> None:
         self.toggle_mute()
 
-    def _on_volume_changed(self, _scale: Gtk.Scale) -> None:
-        if self._updating_volume_ui:
-            return
-        self.set_volume(self._volume_adj.get_value())
-
     def _apply_volume(self) -> None:
         if self._playbin is None or self._loop_as_gif:
             return
@@ -375,9 +527,8 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
 
     def _update_volume_ui(self) -> None:
         displayed = 0.0 if self._muted else self._volume
-        self._updating_volume_ui = True
-        self._volume_adj.set_value(displayed)
-        self._updating_volume_ui = False
+        if self._volume_hover is not None:
+            self._volume_hover.set_displayed_volume(displayed)
         if self._muted or displayed == 0:
             self._volume_icon.set_from_icon_name("lucide-volume-off-symbolic")
             self._mute_button.set_tooltip_text(_("Unmute"))
@@ -678,10 +829,11 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         if self._is_playing:
             self._play_icon.set_from_icon_name("lucide-pause-symbolic")
             self._play_pause_button.set_tooltip_text(_("Pause"))
-            self._controls_box.set_visible(True)
         else:
             self._play_icon.set_from_icon_name("lucide-play-symbolic")
             self._play_pause_button.set_tooltip_text(_("Play"))
+        if self._pointer_inside:
+            self._controls_box.set_visible(True)
         self.emit("playback-updated")
 
     def _update_progress_ui(self) -> None:
@@ -693,20 +845,28 @@ class VideoPreviewWidget(Gtk.Box, SignalManager):
         )
         self.emit("playback-updated")
 
-    def _on_content_cursor_enter(
-        self,
-        _controller: Gtk.EventControllerMotion,
-        _x: int,
-        _y: int,
+    def _on_content_contains_pointer(
+        self, controller: Gtk.EventControllerMotion, *_args: object
     ) -> None:
-        self._file_control_buttons.set_visible(True)
-        if not self._loop_as_gif:
-            self._controls_box.set_visible(True)
+        inside = bool(controller.get_property("contains-pointer"))
+        if inside == self._pointer_inside:
+            return
+        self._pointer_inside = inside
+        if inside:
+            self._file_control_buttons.set_visible(True)
+            if not self._loop_as_gif:
+                self._controls_box.set_visible(True)
+            return
+        if self._volume_hover is not None and self._volume_hover.is_visible():
+            return
+        self._hide_hover_chrome()
 
-    def _on_content_cursor_leave(
-        self,
-        _controller: Gtk.EventControllerMotion,
-    ) -> None:
+    def _on_volume_popover_closed(self) -> None:
+        if not self._pointer_inside:
+            self._hide_hover_chrome()
+
+    def _hide_hover_chrome(self) -> None:
+        if self._volume_hover is not None:
+            self._volume_hover.popdown()
         self._file_control_buttons.set_visible(False)
-        if not self._is_playing:
-            self._controls_box.set_visible(False)
+        self._controls_box.set_visible(False)

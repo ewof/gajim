@@ -786,8 +786,11 @@ entry.field-missing {
     min-width: 0;
 }
 .preview-video-volume {
-    min-width: 48px;
-    max-width: 64px;
+    min-width: 0;
+    min-height: 88px;
+}
+popover.preview-video-volume-popover > contents {
+    padding: 6px 4px;
 }
 .media-lightbox,
 window.media-lightbox {
