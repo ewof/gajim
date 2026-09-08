@@ -293,20 +293,11 @@ class VideoFullscreen(Gtk.Window, SignalManager):
         self._mute_button.set_child(self._volume_icon)
         self._connect(self._mute_button, "clicked", self._on_mute)
 
-        self._volume_adj = Gtk.Adjustment(
-            lower=0, upper=1, value=1, step_increment=0.05, page_increment=0.1
+        from gajim.gtk.preview.video import VolumeHoverPopover
+
+        self._volume_hover = VolumeHoverPopover(
+            self._mute_button, self._on_volume_hover_changed
         )
-        self._volume_bar = Gtk.Scale(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            adjustment=self._volume_adj,
-            width_request=80,
-            hexpand=False,
-            valign=Gtk.Align.CENTER,
-            draw_value=False,
-            tooltip_text=_("Volume"),
-        )
-        self._volume_bar.add_css_class("preview-video-volume")
-        self._connect(self._volume_bar, "value-changed", self._on_volume_changed)
 
         self._fullscreen_button = Gtk.Button(tooltip_text=_("Exit Fullscreen"))
         self._fullscreen_button.add_css_class("circular")
@@ -320,7 +311,6 @@ class VideoFullscreen(Gtk.Window, SignalManager):
         self._controls.append(self._seek_bar)
         self._controls.append(self._progress_label)
         self._controls.append(self._mute_button)
-        self._controls.append(self._volume_bar)
         self._controls.append(self._fullscreen_button)
         overlay.add_overlay(self._controls)
 
@@ -375,7 +365,7 @@ class VideoFullscreen(Gtk.Window, SignalManager):
         volume, muted = self._video_widget.get_volume_state()
         displayed = 0.0 if muted else volume
         self._updating_volume_ui = True
-        self._volume_adj.set_value(displayed)
+        self._volume_hover.set_displayed_volume(displayed)
         self._updating_volume_ui = False
         if muted or displayed == 0:
             self._volume_icon.set_from_icon_name("lucide-volume-off-symbolic")
@@ -406,13 +396,13 @@ class VideoFullscreen(Gtk.Window, SignalManager):
         if isinstance(self._video_widget, VideoPreviewWidget):
             self._video_widget.toggle_mute()
 
-    def _on_volume_changed(self, _scale: Gtk.Scale) -> None:
+    def _on_volume_hover_changed(self, volume: float) -> None:
         from gajim.gtk.preview.video import VideoPreviewWidget
 
         if self._updating_volume_ui:
             return
         if isinstance(self._video_widget, VideoPreviewWidget):
-            self._video_widget.set_volume(self._volume_adj.get_value())
+            self._video_widget.set_volume(volume)
 
     def _on_seek(self, _scale: Gtk.Scale, _scroll: Gtk.ScrollType, value: float) -> bool:
         from gajim.gtk.preview.video import VideoPreviewWidget
@@ -448,6 +438,7 @@ class VideoFullscreen(Gtk.Window, SignalManager):
         if self._progress_id is not None:
             GLib.source_remove(self._progress_id)
             self._progress_id = None
+        self._volume_hover.cleanup()
         self._disconnect_all()
         if _open_fullscreen is self:
             _open_fullscreen = None
