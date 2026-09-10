@@ -28,11 +28,11 @@
 set -e
 
 # Variables
-gajim_version="master"
+gajim_version="inline_media_previews"
 nbxmpp_version="master"
 omemo_dr_version="master"
 python_version="3.14"
-gajim_git="https://gitlab.com/gajim/gajim"
+gajim_git="https://github.com/ewof/gajim"
 nbxmpp_git="https://gitlab.com/gajim/python-nbxmpp"
 omemo_dr_git="https://gitlab.com/gajim/omemo-dr"
 python_dependencies="\
