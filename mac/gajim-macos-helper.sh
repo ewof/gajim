@@ -28,7 +28,7 @@
 set -e
 
 # Variables
-gajim_version="inline_media_previews"
+gajim_version="zoomer"
 nbxmpp_version="master"
 omemo_dr_version="master"
 python_version="3.14"
