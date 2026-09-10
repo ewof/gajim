@@ -53,6 +53,7 @@ ${MINGW_PACKAGE_PREFIX}-libnice \
 ${MINGW_PACKAGE_PREFIX}-libspelling \
 ${MINGW_PACKAGE_PREFIX}-libsoup3 \
 ${MINGW_PACKAGE_PREFIX}-libwebp \
+${MINGW_PACKAGE_PREFIX}-python \
 ${MINGW_PACKAGE_PREFIX}-python-certifi \
 ${MINGW_PACKAGE_PREFIX}-python-cryptography \
 ${MINGW_PACKAGE_PREFIX}-python-gobject \
@@ -61,6 +62,7 @@ ${MINGW_PACKAGE_PREFIX}-python-idna \
 ${MINGW_PACKAGE_PREFIX}-python-keyring \
 ${MINGW_PACKAGE_PREFIX}-python-packaging \
 ${MINGW_PACKAGE_PREFIX}-python-pillow \
+${MINGW_PACKAGE_PREFIX}-python-distlib \
 ${MINGW_PACKAGE_PREFIX}-python-pip \
 ${MINGW_PACKAGE_PREFIX}-python-protobuf \
 ${MINGW_PACKAGE_PREFIX}-python-pygments \
@@ -111,7 +113,7 @@ function build_python {
 }
 
 function build_compileall {
-    build_python -m compileall -q -f "$@"
+    build_python -m compileall -q -f -s "${MINGW_ROOT}" -p . "$@"
 }
 
 function install_pre_deps {
@@ -139,6 +141,8 @@ function create_root {
 function install_mingw_deps {
     # Downgrade pango https://gitlab.com/gajim/gajim/-/work_items/12730
     build_pacman --noconfirm -U https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pango-1.56.4-3-any.pkg.tar.zst
+    # Reinstall explicit dependencies: cleanup removes Python headers, config,
+    # import libraries and distlib launchers without updating the package database.
     build_pacman --noconfirm -S ${MINGW_DEPS}
 }
 
@@ -212,11 +216,13 @@ function install_gajim {
 
 function cleanup_install {
     # Cleanup build directory to minimize setup file size
+    # Remove distlib with pip so its launcher templates are restored next build.
 
     build_pacman --noconfirm -Rdd \
         ${MINGW_PACKAGE_PREFIX}-abseil-cpp \
         ${MINGW_PACKAGE_PREFIX}-frei0r-plugins \
         ${MINGW_PACKAGE_PREFIX}-ncurses \
+        ${MINGW_PACKAGE_PREFIX}-python-distlib \
         ${MINGW_PACKAGE_PREFIX}-python-pip \
         ${MINGW_PACKAGE_PREFIX}-shared-mime-info \
         ${MINGW_PACKAGE_PREFIX}-tcl \
