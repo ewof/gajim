@@ -156,6 +156,15 @@
               </object>
             </child>
             <child>
+              <object class="GtkButton" id="_call_button">
+                <property name="visible">0</property>
+                <property name="tooltip-text" translatable="yes">Start Secure Audio Call</property>
+                <property name="valign">center</property>
+                <property name="action-name">win.start-voice-call</property>
+                <property name="icon-name">lucide-phone-symbolic</property>
+              </object>
+            </child>
+            <child>
               <object class="GtkButton" id="_contact_info_button">
                 <property name="focusable">1</property>
                 <property name="receives-default">1</property>

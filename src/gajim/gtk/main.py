@@ -622,6 +622,7 @@ class MainWindow(Adw.ApplicationWindow, EventHelper):
             ("add-chat", self._add_chat),
             ("add-group-chat", self._add_group_chat),
             ("chat-contact-info", self._on_chat_contact_info),
+            ("call-chat", self._on_call_chat),
             ("muc-user-block", self._on_muc_user_block),
             ("muc-user-unblock", self._on_muc_user_unblock),
         ]
@@ -743,6 +744,11 @@ class MainWindow(Adw.ApplicationWindow, EventHelper):
 
     def _on_copy_message(self, _action: Gio.SimpleAction, param: GLib.Variant) -> None:
         self.get_clipboard().set(param.get_string())
+
+    @actionmethod
+    def _on_call_chat(self, _action: Gio.SimpleAction, params: AccountJidParam) -> None:
+        if app.account_is_connected(params.account):
+            app.get_client(params.account).get_module("SecureCalls").start(params.jid)
 
     @actionmethod
     def _on_chat_contact_info(

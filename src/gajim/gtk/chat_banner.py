@@ -58,6 +58,7 @@ class ChatBanner(Gtk.Box, EventHelper, SignalManager):
     _additional_items_box: Gtk.Box = Gtk.Template.Child()
     _share_menu_button: Gtk.MenuButton = Gtk.Template.Child()
     _contact_info_button: Gtk.Button = Gtk.Template.Child()
+    _call_button: Gtk.Button = Gtk.Template.Child()
     _muc_invite_button: Gtk.Button = Gtk.Template.Child()
     _toggle_roster_button: Gtk.Button = Gtk.Template.Child()
     _toggle_roster_image: Gtk.Image = Gtk.Template.Child()
@@ -127,6 +128,9 @@ class ChatBanner(Gtk.Box, EventHelper, SignalManager):
         self._update_roster_button()
         self._update_invite_button()
         self._update_contact_info_button()
+        self._call_button.set_visible(
+            isinstance(contact, BareContact) and not contact.is_self
+        )
         self._update_avatar()
         self._update_avatar_button_sensitivity()
         self._update_name_label()

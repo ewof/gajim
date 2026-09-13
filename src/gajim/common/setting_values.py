@@ -26,6 +26,7 @@ HAS_ACCOUNT_DEFAULT = _ACCOUNTDEFAULT()
 
 
 BoolSettings = Literal[
+    "calls_do_not_relay",
     "always_english_wikipedia",
     "always_english_wiktionary",
     "ask_online_status",
@@ -149,6 +150,7 @@ AllSettings = Literal[BoolSettings, IntSettings, FloatSettings, StringSettings]
 AllSettingsT = str | int | float | bool | list[str]
 
 APP_SETTINGS: dict[str, str | int | float | bool | list[Any]] = {
+    "calls_do_not_relay": False,
     "additional_uri_schemes": "",
     "always_english_wikipedia": False,
     "always_english_wiktionary": True,

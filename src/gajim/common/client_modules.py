@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from gajim.common.modules.roster import Roster
     from gajim.common.modules.roster_item_exchange import RosterItemExchange
     from gajim.common.modules.search import Search
+    from gajim.common.modules.secure_calls import SecureCalls
     from gajim.common.modules.security_labels import SecLabels
     from gajim.common.modules.software_version import SoftwareVersion
     from gajim.common.modules.user_avatar import UserAvatar
@@ -148,6 +149,8 @@ class ClientModules:
     def get_module(self, name: Literal["Search"]) -> Search: ...
     @overload
     def get_module(self, name: Literal["SecLabels"]) -> SecLabels: ...
+    @overload
+    def get_module(self, name: Literal["SecureCalls"]) -> SecureCalls: ...
     @overload
     def get_module(self, name: Literal["SoftwareVersion"]) -> SoftwareVersion: ...  # noqa: E501
     @overload

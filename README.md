@@ -2,6 +2,12 @@
 
 ## Gajim
 
+changes from normal gajim:
+
+- videos can be played inline and have controls
+- direct media links (and tenor/klipy) embed and play in gajim
+- [calling support](./CALLING.md)
+
 A fully-featured XMPP chat client.
 
 Gajim aims to be an easy to use and fully-featured XMPP client.
