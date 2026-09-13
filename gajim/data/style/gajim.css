@@ -5,8 +5,9 @@ https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/css-variables.html
 */
 
 /* GTK specific changes =================================================== */
-/* Square the main window; media and other widgets keep their own radii. */
-window.gajim-main-window {
+/* Square the main and audio call windows; widgets keep their own radii. */
+window.gajim-main-window,
+window.secure-call-window {
     --window-radius: 0px;
     border-radius: 0;
 }

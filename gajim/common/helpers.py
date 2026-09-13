@@ -116,11 +116,9 @@ def get_optional_features(account: str) -> list[str]:
         features.append(Namespace.BOOKMARKS_1 + "+notify")
     elif client.get_module("Bookmarks").pep_bookmarks_used:
         features.append(Namespace.BOOKMARKS + "+notify")
-    # if app.is_installed("AV"):
-    #     features.append(Namespace.JINGLE_RTP)
-    #     features.append(Namespace.JINGLE_RTP_AUDIO)
-    #     features.append(Namespace.JINGLE_RTP_VIDEO)
-    #     features.append(Namespace.JINGLE_ICE_UDP)
+    if client.get_module("SecureCalls").available:
+        from gajim.common.calls.protocol import FEATURES
+        features.extend(FEATURES)
 
     # Give plugins the possibility to add their features
     app.plugin_manager.extension_point("update_caps", account, features)

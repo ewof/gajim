@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 import uuid
 
 from gi.repository import Gdk
@@ -578,10 +577,10 @@ class ChatStack(Gtk.Stack, EventHelper, SignalManager):
         online = app.account_is_connected(contact.account)
 
         app.window.get_action("start-voice-call").set_enabled(
-            online and contact.supports_audio and sys.platform != "win32"
+            online and app.get_client(contact.account).get_module("SecureCalls").available
         )
         app.window.get_action("start-video-call").set_enabled(
-            online and contact.supports_video and sys.platform != "win32"
+            False
         )
 
     def _update_group_chat_actions(self, contact: GroupchatContact) -> None:
@@ -626,7 +625,7 @@ class ChatStack(Gtk.Stack, EventHelper, SignalManager):
             self._on_send_message()
 
         elif action_name == "start-voice-call":
-            app.call_manager.start_call(account, jid, CallType.AUDIO)
+            client.get_module("SecureCalls").start(jid)
 
         elif action_name == "start-video-call":
             app.call_manager.start_call(account, jid, CallType.VIDEO)

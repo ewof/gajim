@@ -229,6 +229,7 @@ MAIN_WIN_ACTIONS = [
     ("show-contact-info", None, True),
     ("show-chat-share", None, True),
     ("chat-contact-info", "a{sv}", True),
+    ("call-chat", "a{sv}", True),
     ("send-message", None, False),
     ("muc-change-nickname", None, False),
     ("muc-invite", None, False),

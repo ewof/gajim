@@ -129,10 +129,6 @@ def get_singlechat_menu(contact: types.BareContact) -> GajimMenu:
     menu.append_submenu(_("Send File"), submenu)
     menu.add_item(_("Block Contact…"), f"app.{account}-block-contact", params)
 
-    # Disable because not maintained
-    # menu.add_item(_("Start Voice Call…"), "win.start-voice-call")
-    # menu.add_item(_("Start Video Call…"), "win.start-video-call")
-
     if can_add_to_roster(contact):
         menu.add_item(_("Add Contact…"), f"app.{account}-add-contact", params)
 
@@ -503,6 +499,13 @@ def get_chat_list_row_menu(
 
     toggle_label = _("Unpin Chat") if pinned else _("Pin Chat")
     menu.add_item(toggle_label, "win.toggle-chat-pinned", params)
+
+    if isinstance(contact, BareContact) and not contact.is_self:
+        menu.add_item(
+            _("Start Secure Audio Call…"),
+            "win.call-chat",
+            AccountJidParam(account=account, jid=jid),
+        )
 
     submenu = menu.add_submenu(_("Move Chat"))
     if app.settings.get_workspace_count() > 1:
