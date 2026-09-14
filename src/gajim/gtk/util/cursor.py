@@ -10,6 +10,10 @@ from gi.repository import Gtk
 def _is_clickable(widget: Gtk.Widget) -> bool:
     if isinstance(widget, (Gtk.Editable, Gtk.TextView)):
         return False
+    # Popover menu items use GTK's private GtkModelButton type, which does not
+    # inherit from Gtk.Button and is not exposed through introspection.
+    if widget.__gtype__.name == "GtkModelButton":
+        return True
     if isinstance(
         widget,
         (
