@@ -73,6 +73,7 @@ from gajim.gtk.const import FEATURE_ACCOUNT_ACTIONS
 from gajim.gtk.const import MuteState
 from gajim.gtk.const import ONLINE_ACCOUNT_ACTIONS
 from gajim.gtk.shortcut_manager import ShortcutManager
+from gajim.gtk.util.cursor import install_pointer_cursors
 from gajim.gtk.util.icons import get_icon_theme
 from gajim.gtk.util.misc import open_file
 from gajim.gtk.util.misc import open_uri
@@ -95,6 +96,7 @@ class GajimApplication(Adw.Application, CoreApplication):
         Adw.Application.__init__(
             self, application_id=app.get_default_app_id(), flags=flags
         )
+        install_pointer_cursors()
 
         # required to track screensaver state
         self.props.register_session = True

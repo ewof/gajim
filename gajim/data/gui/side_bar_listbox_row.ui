@@ -39,6 +39,7 @@
     </property>
     <style>
       <class name="sidebar-listbox-row" />
+      <class name="clickable" />
     </style>
   </template>
 </interface>
